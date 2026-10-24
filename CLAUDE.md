@@ -30,10 +30,15 @@ The native host is a local program installed on the user's machine, not a hosted
 - Extension id: `claude-firefox-extension@localhost`. The native messaging host manifest's `allowed_extensions` must match it.
 - Permissions and host permissions are added in the feature that first needs them, not up front.
 - Firefox MV3 host permissions are opt-in for the user: a feature that needs them must document granting them in `about:addons` or request them at runtime.
-- Bridge between the MCP process and the native messaging process: a Unix domain socket `bridge.sock` in the first of `$XDG_RUNTIME_DIR/claude-firefox-extension/`, `/run/user/<uid>/claude-firefox-extension/` (Linux, if that runtime dir exists and is owned by the user), `/tmp/claude-firefox-extension-<uid>/` (literal `/tmp`, never `TMPDIR`). The order does not depend on variables Claude Code may strip from the MCP server's environment. Directory 0700 and socket 0600, no token. Both processes `lstat` the directory and refuse it if it is a symlink, not a directory, not owned by the current uid, or has any group/other permission bits. Windows is not supported yet: the code falls back to a named pipe with the default ACL, which is not restricted to the current user. The native host listens; every MCP server process connects to it. Messages on the socket are newline-delimited JSON; the host multiplexes clients by rewriting request ids to `<clientId>:<id>`.
+- Bridge between the MCP process and the native messaging process: the native host listens; every MCP server process connects to it. Messages are newline-delimited JSON; the host multiplexes clients by rewriting request ids to `<clientId>:<id>`.
+  - Endpoint on Linux and macOS: a Unix domain socket `bridge.sock` in the first of `$XDG_RUNTIME_DIR/claude-firefox-extension/`, `/run/user/<uid>/claude-firefox-extension/` (Linux, if that runtime dir exists and is owned by the user), `/tmp/claude-firefox-extension-<uid>/` (literal `/tmp`, never `TMPDIR`). The order does not depend on variables Claude Code may strip from the MCP server's environment. Directory 0700 and socket 0600. Both processes `lstat` the directory and refuse it if it is a symlink, not a directory, not owned by the current uid, or has any group/other permission bits.
+  - Endpoint on Windows: a named pipe with a random name `\\.\pipe\claude-firefox-extension-<32 hex>`, new at every host start (retried on `EADDRINUSE`). Node cannot put an ACL on the pipe, so the random name prevents squatting and the handshake keeps other users out.
+  - `bridge.json` (`{version: 1, endpoint, secret, pid}`, mode 0600) is written by the host after it listens, next to the socket on Linux and macOS and in `%LOCALAPPDATA%\claude-firefox-extension\` on Windows. The secret is 32 random bytes, new at every start. The file is replaced atomically (temp file + rename, retried on `EPERM`/`EBUSY` on Windows) and removed on exit only while it still describes this host. The MCP server re-reads it on every (re)connect.
+  - Every connection, on all platforms, runs a mutual HMAC-SHA256 handshake before any tool traffic: client `hello` with a nonce, host `hello` with its nonce and host proof, client `auth` with its proof, host `ready`. Proofs are HMAC over `label:clientNonce:serverNonce` keyed with the secret; the client checks the host proof before revealing its own. Either side closes on any other message before `ready`.
+  - Limits before `ready`: 2 s from connect, at most 8 unauthenticated connections on the host, 4 KiB per line on the host; after `ready`, 64 MB per line.
 - Tests: Vitest, run with `npm test` from `src/`. Every feature ships with its own automated tests.
 - TDD where it fits: logic with a spec known up front (protocols, framing, multiplexing, parsing, accessibility tree and `ref_N` resolution, argument validation, translating `computer` actions to WebDriver BiDi) gets its tests written first, reviewed, then the implementation. Code whose correctness depends on real Firefox behavior (native messaging lifecycle, event page suspension, `captureVisibleTab`, permissions, BiDi) is written first and covered afterwards, together with a check in a real Firefox.
-- Windows support is required: a named pipe restricted to the current user and registry-based native host registration. Delivered by `feature/windows-support`; until then the bridge note above describes the current state.
+- Windows support is required. `feature/windows-support` delivers the authenticated bridge above and, as its next part, the installer: registry-based native host registration and a `.cmd` wrapper.
 
 ## Roadmap
 
@@ -55,6 +60,7 @@ Each feature is its own branch from `main`. The feature's last commit marks it `
 ```
 CLAUDE.md
 .gitignore
+.github/workflows/ci.yml  GitHub Actions on Linux, Windows, macOS (Node 24): npm ci, typecheck, build, lint, test
 src/                   npm package root; every command is run from here
   package.json
   package-lock.json
@@ -74,7 +80,10 @@ src/                   npm package root; every command is run from here
                        helpers.ts (temp dirs under /tmp, fake extension, bridge client), global-setup.ts
     index.ts           dispatches by flag: --native-host or --mcp
     protocol.ts        message types for both channels, shared constants
-    socket-path.ts     bridge socket path resolution and permissions
+    socket-path.ts     bridge socket path resolution and permissions; random pipe names on Windows
+    bridge-info.ts     bridge.json location, atomic write, validated read, removal on exit
+    handshake.ts       bridge handshake: nonces, HMAC proofs, message parsers, limits
+    listen.ts          listen on an endpoint, retrying fresh endpoints on EADDRINUSE
     json-lines.ts      newline-delimited JSON framing on the bridge socket
     native-messaging.ts  Firefox native messaging stdio framing
     native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients

@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { userInfo } from 'node:os';
@@ -19,7 +20,7 @@ function isOwnDirectory(path: string, uid: number): boolean {
 // Firefox starts the native host with the full session environment, but Claude Code may start the
 // MCP server with only a few variables, so the path must not depend on TMPDIR and should survive a
 // missing XDG_RUNTIME_DIR.
-function socketDir(): string {
+export function bridgeSocketDir(): string {
   const runtimeDir = process.env['XDG_RUNTIME_DIR'];
   if (runtimeDir) return join(runtimeDir, APP_NAME);
   const { uid } = userInfo();
@@ -31,11 +32,12 @@ function socketDir(): string {
 }
 
 export function bridgeSocketPath(): string {
-  // Windows has no socket files: named pipes live in a flat namespace and vanish with their owner.
-  // The pipe gets the default ACL, so it is not restricted to the current user; Windows is not
-  // supported yet.
-  if (isWindows) return `\\\\.\\pipe\\${APP_NAME}-${userInfo().username}`;
-  const path = join(socketDir(), SOCKET_FILE_NAME);
+  // Named pipes live in a flat, machine-wide namespace and Node cannot give them an ACL, so any local
+  // user could take a fixed name first. The name is random on every call instead and reaches the MCP
+  // server only through bridge.json in the user's private %LOCALAPPDATA%; the handshake secret is
+  // what actually keeps other users out.
+  if (isWindows) return `\\\\.\\pipe\\${APP_NAME}-${randomBytes(16).toString('hex')}`;
+  const path = join(bridgeSocketDir(), SOCKET_FILE_NAME);
   // sun_path is 108 bytes on Linux and 104 on macOS and the BSDs, including the terminating NUL.
   const maxBytes = process.platform === 'linux' ? 107 : 103;
   const bytes = Buffer.byteLength(path);
@@ -63,7 +65,7 @@ async function assertPrivateDir(dir: string): Promise<void> {
 
 export async function prepareBridgeSocketDir(): Promise<void> {
   if (isWindows) return;
-  const dir = socketDir();
+  const dir = bridgeSocketDir();
   try {
     await mkdir(dir, { mode: 0o700 });
   } catch (error) {
@@ -74,7 +76,7 @@ export async function prepareBridgeSocketDir(): Promise<void> {
 
 export async function checkBridgeSocketDir(): Promise<void> {
   if (isWindows) return;
-  await assertPrivateDir(socketDir());
+  await assertPrivateDir(bridgeSocketDir());
 }
 
 export async function restrictBridgeSocket(path: string): Promise<void> {

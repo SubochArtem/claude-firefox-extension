@@ -3,13 +3,29 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import packageJson from '../package.json' with { type: 'json' };
+import { readBridgeInfo } from './bridge-info';
+import {
+  clientProof,
+  createNonce,
+  HANDSHAKE_TIMEOUT_MS,
+  hostProof,
+  parseHostHello,
+  parseReady,
+  verifyProof,
+} from './handshake';
 import { readJsonLines, writeJsonLine } from './json-lines';
 import { parseToolResponse, TOOL_REQUEST_TIMEOUT_MS, type ToolRequest, type ToolResponse } from './protocol';
-import { bridgeSocketPath, checkBridgeSocketDir } from './socket-path';
+import { checkBridgeSocketDir } from './socket-path';
 
 const LOG = '[mcp-server]';
 const NOT_CONNECTED_MESSAGE =
   'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
+
+class AuthenticationError extends Error {
+  constructor(reason: string) {
+    super(`Authentication with the native host failed: ${reason}`);
+  }
+}
 
 interface PendingCall {
   resolve: (response: ToolResponse) => void;
@@ -30,6 +46,7 @@ class BridgeConnection {
     try {
       socket = await this.connect();
     } catch (error) {
+      if (error instanceof AuthenticationError) return errorResult(error.message);
       const code = (error as NodeJS.ErrnoException).code;
       if (code === 'ENOENT' || code === 'ECONNREFUSED') return errorResult(NOT_CONNECTED_MESSAGE);
       return errorResult(`Could not reach the native host: ${(error as Error).message}`);
@@ -60,25 +77,86 @@ class BridgeConnection {
     }
   }
 
+  // Concurrent calls share one connection attempt and one handshake. bridge.json is read on every
+  // attempt, because a restarted host has a new secret and, on Windows, a new pipe name.
   private connect(): Promise<Socket> {
     if (this.socket) return Promise.resolve(this.socket);
-    this.connecting ??= checkBridgeSocketDir()
-      .then(
-        () =>
-          new Promise<Socket>((resolve, reject) => {
-            const socket = createConnection(bridgeSocketPath());
-            socket.once('error', reject);
-            socket.once('connect', () => {
-              socket.off('error', reject);
-              this.attach(socket);
-              resolve(socket);
-            });
-          }),
-      )
-      .finally(() => {
-        this.connecting = undefined;
-      });
+    this.connecting ??= this.open().finally(() => {
+      this.connecting = undefined;
+    });
     return this.connecting;
+  }
+
+  private async open(): Promise<Socket> {
+    await checkBridgeSocketDir();
+    const { endpoint, secret } = await readBridgeInfo();
+    const socket = await new Promise<Socket>((resolve, reject) => {
+      const socket = createConnection(endpoint);
+      socket.once('error', reject);
+      socket.once('connect', () => {
+        socket.off('error', reject);
+        socket.on('error', (error) => console.error(`${LOG} bridge socket error:`, error.message));
+        resolve(socket);
+      });
+    });
+    await this.authenticate(socket, secret);
+    this.attach(socket);
+    return socket;
+  }
+
+  // The host proves it knows the secret before the client reveals its own proof, so a process that
+  // took over the endpoint learns nothing it could replay. Nothing but the handshake is accepted
+  // before ready: a tool response from an unauthenticated peer must never reach a caller.
+  private authenticate(socket: Socket, secret: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const clientNonce = createNonce();
+      let serverNonce: string | undefined;
+      let settled = false;
+      let ready = false;
+      const fail = (reason: string): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        reject(new AuthenticationError(reason));
+      };
+      const timer = setTimeout(() => fail(`no ready within ${HANDSHAKE_TIMEOUT_MS / 1000} s`), HANDSHAKE_TIMEOUT_MS);
+      const onClose = (): void => fail('the native host closed the connection');
+      socket.once('close', onClose);
+      readJsonLines(
+        socket,
+        (message) => {
+          if (ready) {
+            this.handleMessage(message);
+            return;
+          }
+          if (settled) return;
+          if (serverNonce === undefined) {
+            const hello = parseHostHello(message);
+            if (!hello) return fail('expected hello from the native host');
+            if (!verifyProof(hostProof(secret, clientNonce, hello.nonce), hello.proof)) {
+              return fail('the native host could not prove it knows the secret from bridge.json');
+            }
+            serverNonce = hello.nonce;
+            writeJsonLine(socket, { type: 'auth', proof: clientProof(secret, clientNonce, serverNonce) });
+            return;
+          }
+          if (!parseReady(message)) return fail('expected ready from the native host');
+          settled = true;
+          ready = true;
+          clearTimeout(timer);
+          socket.off('close', onClose);
+          resolve();
+        },
+        LOG,
+        {
+          onInvalidJson: () => {
+            if (!ready) fail('the native host sent invalid JSON');
+          },
+        },
+      );
+      writeJsonLine(socket, { type: 'hello', nonce: clientNonce });
+    });
   }
 
   close(): void {
@@ -94,8 +172,6 @@ class BridgeConnection {
       return;
     }
     this.socket = socket;
-    readJsonLines(socket, (message) => this.handleMessage(message), LOG);
-    socket.on('error', (error) => console.error(`${LOG} bridge socket error:`, error.message));
     socket.on('close', () => {
       this.socket = undefined;
       this.rejectPending(new Error(NOT_CONNECTED_MESSAGE));
