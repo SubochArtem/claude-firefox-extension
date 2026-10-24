@@ -2,9 +2,22 @@ import { existsSync } from 'node:fs';
 import { Server } from 'node:net';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { connectClient, encodeNativeMessage, nativeLength, socketPathIn, tempDir, textResult, waitFor } from './helpers';
+import {
+  bridgeInfoPathIn,
+  connectClient,
+  connectRaw,
+  encodeNativeMessage,
+  nativeLength,
+  randomHex,
+  sleep,
+  socketPathIn,
+  tempDir,
+  textResult,
+  waitFor,
+} from './helpers';
 
 const HOST_TIMEOUT_MS = 35_000;
+const HANDSHAKE_TIMEOUT_MS = 2_000;
 const SIGNALS = ['exit', 'SIGINT', 'SIGTERM'] as const;
 
 // The 35 s timeout cannot be waited for in a child process, so this file runs the host inside the
@@ -73,14 +86,14 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
       });
 
       vi.advanceTimersByTime(HOST_TIMEOUT_MS - 1);
-      expect(vi.getTimerCount()).toBe(1);
+      await sleep(50);
+      expect(client.lines).toEqual([]);
       vi.advanceTimersByTime(1);
       expect(await client.nextLine()).toEqual({
         type: 'tool_response',
         id: 'slow',
         error: { content: [{ type: 'text', text: 'The Firefox extension did not answer tabs_context in time' }] },
       });
-      expect(vi.getTimerCount()).toBe(0);
 
       host.stdin.write(encodeNativeMessage(textResult(request['id'], 'too late')));
       await waitFor(() =>
@@ -91,6 +104,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
       await host.stop();
     }
     expect(existsSync(socketPathIn(runtimeDir))).toBe(false);
+    expect(existsSync(bridgeInfoPathIn(runtimeDir))).toBe(false);
   });
 
   it('clears the timeout when the extension answers in time', async () => {
@@ -106,12 +120,12 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
         if (!frame) throw new Error('request not forwarded yet');
         return frame;
       });
-      expect(vi.getTimerCount()).toBe(1);
       host.stdin.write(encodeNativeMessage(textResult(request['id'], 'in time')));
       expect(await client.nextLine()).toEqual(textResult('fast', 'in time'));
-      expect(vi.getTimerCount()).toBe(0);
       vi.advanceTimersByTime(HOST_TIMEOUT_MS);
+      await sleep(50);
       expect(client.lines).toHaveLength(1);
+      expect(client.isClosed()).toBe(false);
     } finally {
       await host.stop();
     }
@@ -136,8 +150,76 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
     try {
       await waitFor(() => expect(process.exit).toHaveBeenCalledWith(0));
       expect(existsSync(socketPathIn(runtimeDir))).toBe(false);
+      expect(existsSync(bridgeInfoPathIn(runtimeDir))).toBe(false);
       expect(console.error).toHaveBeenCalledWith('[native-host] shutting down: stdin error: boom');
       expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining('listening on'));
+    } finally {
+      await host.stop();
+    }
+  });
+});
+
+describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('native host handshake timeout', () => {
+  it('closes a connection that sends nothing after exactly 2 s without writing to it', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const runtimeDir = await tempDir();
+    const host = await startInProcessHost(runtimeDir);
+    try {
+      const timersBefore = vi.getTimerCount();
+      const client = await connectRaw(socketPathIn(runtimeDir));
+      // Only a sync point: the host has accepted the connection and started its handshake timer.
+      await waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timersBefore));
+      vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS - 1);
+      await sleep(50);
+      expect(client.isClosed()).toBe(false);
+      vi.advanceTimersByTime(1);
+      await client.closed;
+      expect(client.lines).toEqual([]);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it('counts the 2 s from the connection, not from the hello', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const runtimeDir = await tempDir();
+    const host = await startInProcessHost(runtimeDir);
+    try {
+      const timersBefore = vi.getTimerCount();
+      const client = await connectRaw(socketPathIn(runtimeDir));
+      // Only a sync point: the host has accepted the connection and started its handshake timer.
+      await waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timersBefore));
+      vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS / 2);
+      client.send({ type: 'hello', nonce: randomHex() });
+      expect(await client.nextLine()).toMatchObject({ type: 'hello' });
+      vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS / 2);
+      await client.closed;
+      expect(client.lines).toHaveLength(1);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it('clears the handshake timer once the client is authenticated', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const runtimeDir = await tempDir();
+    const host = await startInProcessHost(runtimeDir);
+    try {
+      const client = await connectClient(socketPathIn(runtimeDir));
+      vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS * 5);
+      await sleep(50);
+      expect(client.isClosed()).toBe(false);
+      client.send({ type: 'tool_request', id: 'late', tool: 'tabs_context', args: {} });
+      const request = await waitFor(() => {
+        const frame = host.frames.find((message) => message['type'] === 'tool_request');
+        if (!frame) throw new Error('request not forwarded yet');
+        return frame;
+      });
+      host.stdin.write(encodeNativeMessage(textResult(request['id'], 'still open')));
+      expect(await client.nextLine()).toEqual(textResult('late', 'still open'));
     } finally {
       await host.stop();
     }

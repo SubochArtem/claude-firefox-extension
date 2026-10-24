@@ -1,8 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { createHmac, randomBytes } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { endianness } from 'node:os';
-import { createConnection, type Socket } from 'node:net';
-import { join } from 'node:path';
+import { createConnection, createServer, type Socket } from 'node:net';
+import { dirname, join } from 'node:path';
 import { inject, onTestFinished } from 'vitest';
 
 export const APP_DIR = 'claude-firefox-extension';
@@ -27,6 +29,10 @@ export async function waitFor<T>(check: () => T | Promise<T>, timeout = WAIT_TIM
   }
 }
 
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => realSetTimeout(resolve, ms));
+}
+
 // Short paths under the literal /tmp keep the socket path far below the 107-byte sun_path limit.
 export async function tempDir(): Promise<string> {
   const dir = await mkdtemp('/tmp/cfe-');
@@ -36,6 +42,30 @@ export async function tempDir(): Promise<string> {
 
 export function socketPathIn(runtimeDir: string): string {
   return join(runtimeDir, APP_DIR, 'bridge.sock');
+}
+
+export function bridgeInfoPathIn(runtimeDir: string): string {
+  return join(runtimeDir, APP_DIR, 'bridge.json');
+}
+
+export interface BridgeJson {
+  version: number;
+  endpoint: string;
+  secret: string;
+  pid: number;
+}
+
+export function readBridgeJson(path: string): BridgeJson {
+  return JSON.parse(readFileSync(path, 'utf8')) as BridgeJson;
+}
+
+export function randomHex(bytes = 32): string {
+  return randomBytes(bytes).toString('hex');
+}
+
+// Independent of ../handshake on purpose, so the process tests check the wire format, not the module.
+export function proof(secret: string, label: 'host' | 'client', clientNonce: string, serverNonce: string): string {
+  return createHmac('sha256', Buffer.from(secret, 'hex')).update(`${label}:${clientNonce}:${serverNonce}`, 'utf8').digest('hex');
 }
 
 export function encodeNativeMessage(message: unknown): Buffer {
@@ -86,6 +116,7 @@ export function track(child: ChildProcessWithoutNullStreams): ChildHandle {
 
 export interface FakeExtension extends ChildHandle {
   socketPath: string;
+  bridgeInfoPath: string;
   received: unknown[];
   send: (message: unknown) => void;
   sendRaw: (bytes: Buffer) => void;
@@ -93,10 +124,14 @@ export interface FakeExtension extends ChildHandle {
   respondWith: (handler: (request: Record<string, unknown>) => unknown) => void;
 }
 
-// Runs the built native host the way Firefox does and plays the extension on its stdio.
-export async function startHost(runtimeDir: string, { waitUntilListening = true } = {}): Promise<FakeExtension> {
+// Runs the built native host the way Firefox does and plays the extension on its stdio. `env`
+// replaces the default environment (the test's own plus XDG_RUNTIME_DIR), e.g. for Windows tests.
+export async function startHost(
+  runtimeDir: string,
+  { waitUntilListening = true, env }: { waitUntilListening?: boolean; env?: NodeJS.ProcessEnv } = {},
+): Promise<FakeExtension> {
   const child = spawn(process.execPath, [hostEntry, '--native-host'], {
-    env: { ...process.env, XDG_RUNTIME_DIR: runtimeDir },
+    env: env ?? { ...process.env, XDG_RUNTIME_DIR: runtimeDir },
   });
   const handle = track(child);
   const received: unknown[] = [];
@@ -124,6 +159,7 @@ export async function startHost(runtimeDir: string, { waitUntilListening = true 
   const host: FakeExtension = {
     ...handle,
     socketPath: socketPathIn(runtimeDir),
+    bridgeInfoPath: bridgeInfoPathIn(runtimeDir),
     received,
     send,
     sendRaw: (bytes) => child.stdin.write(bytes),
@@ -150,6 +186,23 @@ export async function startHost(runtimeDir: string, { waitUntilListening = true 
   return host;
 }
 
+// Builds a child environment from `base` (process.env by default) with every key named in
+// `overrides` removed case-insensitively, then sets the overrides that are not undefined. Windows
+// environment names are case-insensitive, but a copied env object is not, so a plain spread could
+// leave both 'LocalAppData' and 'LOCALAPPDATA' in place.
+export function childEnv(
+  overrides: Record<string, string | undefined>,
+  base: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const replaced = new Set(Object.keys(overrides).map((key) => key.toUpperCase()));
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(base)) {
+    if (value !== undefined && !replaced.has(key.toUpperCase())) env[key] = value;
+  }
+  for (const [key, value] of Object.entries(overrides)) if (value !== undefined) env[key] = value;
+  return env;
+}
+
 export function textResult(id: unknown, text: string): unknown {
   return { type: 'tool_response', id, result: { content: [{ type: 'text', text }] } };
 }
@@ -160,11 +213,35 @@ export interface BridgeClient {
   send: (message: unknown) => void;
   nextLine: () => Promise<Record<string, unknown>>;
   closed: Promise<void>;
+  isClosed: () => boolean;
 }
 
-// Talks to the bridge socket the way the MCP server does: one JSON object per line.
-export async function connectClient(socketPath: string): Promise<BridgeClient> {
-  const socket = createConnection(socketPath);
+// A bridge connection without the handshake: one JSON object per line in both directions.
+export async function connectRaw(endpoint: string): Promise<BridgeClient> {
+  return (await openClient(endpoint)).client;
+}
+
+// Connects the way the MCP server does: performs the handshake with the secret from bridge.json
+// (by default the one next to the socket), checks the host proof, and waits for ready. The
+// handshake lines are then dropped, so `lines` and `nextLine` only see tool traffic.
+export async function connectClient(endpoint: string, secret?: string): Promise<BridgeClient> {
+  const { client, forget } = await openClient(endpoint);
+  const key = secret ?? readBridgeJson(join(dirname(endpoint), 'bridge.json')).secret;
+  const clientNonce = randomHex();
+  client.send({ type: 'hello', nonce: clientNonce });
+  const hello = await client.nextLine();
+  const serverNonce = hello['nonce'];
+  if (hello['type'] !== 'hello' || typeof serverNonce !== 'string') throw new Error(`unexpected host hello ${JSON.stringify(hello)}`);
+  if (hello['proof'] !== proof(key, 'host', clientNonce, serverNonce)) throw new Error('the host proof is wrong');
+  client.send({ type: 'auth', proof: proof(key, 'client', clientNonce, serverNonce) });
+  const ready = await client.nextLine();
+  if (ready['type'] !== 'ready') throw new Error(`expected ready, got ${JSON.stringify(ready)}`);
+  forget();
+  return client;
+}
+
+async function openClient(endpoint: string): Promise<{ client: BridgeClient; forget: () => void }> {
+  const socket = createConnection(endpoint);
   onTestFinished(() => {
     socket.destroy();
   });
@@ -176,14 +253,20 @@ export async function connectClient(socketPath: string): Promise<BridgeClient> {
   const lines: Record<string, unknown>[] = [];
   let consumed = 0;
   let partial = '';
+  let isClosed = false;
   socket.setEncoding('utf8');
   socket.on('data', (chunk: string) => {
     const parts = (partial + chunk).split('\n');
     partial = parts.pop() ?? '';
     for (const part of parts) if (part.trim() !== '') lines.push(JSON.parse(part) as Record<string, unknown>);
   });
-  const closed = new Promise<void>((resolve) => socket.once('close', () => resolve()));
-  return {
+  const closed = new Promise<void>((resolve) =>
+    socket.once('close', () => {
+      isClosed = true;
+      resolve();
+    }),
+  );
+  const client: BridgeClient = {
     socket,
     lines,
     send: (message) => socket.write(`${JSON.stringify(message)}\n`),
@@ -195,5 +278,132 @@ export async function connectClient(socketPath: string): Promise<BridgeClient> {
         return line;
       }),
     closed,
+    isClosed: () => isClosed,
+  };
+  const forget = (): void => {
+    lines.splice(0, consumed);
+    consumed = 0;
+  };
+  return { client, forget };
+}
+
+export type FakeHostMode =
+  | 'normal'
+  | 'wrong-secret'
+  | 'replay-proof'
+  | 'short-proof'
+  | 'non-hex-proof'
+  | 'silent'
+  | 'close-after-hello'
+  | 'ready-without-hello'
+  | 'no-ready'
+  | 'response-after-hello'
+  | 'response-instead-of-ready';
+
+// The id the MCP server gives its first tool request, which the 'response-*' modes answer early.
+export const FIRST_REQUEST_ID = '1';
+export const INJECTED_TEXT = 'injected before ready';
+
+export interface FakeHost {
+  secret: string;
+  received: Record<string, unknown>[];
+  requests: Record<string, unknown>[];
+  connections: () => number;
+  answer: (message: unknown) => void;
+  respondWith: (handler: (request: Record<string, unknown>) => unknown) => void;
+  close: () => Promise<void>;
+}
+
+// Plays the native host on the bridge socket in the test process and writes a matching bridge.json.
+// 'normal' runs the host side of the handshake; the other modes break it in one specific way:
+// - 'wrong-secret' proves a different secret;
+// - 'replay-proof' answers every hello with one fixed server nonce and a genuine host proof for it,
+//   computed with the right secret but for another client nonce, as if captured from an earlier
+//   handshake;
+// - 'short-proof' and 'non-hex-proof' send a malformed proof;
+// - 'response-after-hello' writes a tool_response for the first request id in the same write as its
+//   hello, then completes the handshake;
+// - 'response-instead-of-ready' accepts the auth but sends that tool_response instead of ready.
+// Every line the MCP server sends lands in `received`; `requests` holds the lines that are not part
+// of the handshake.
+export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'normal'): Promise<FakeHost> {
+  mkdirSync(join(runtimeDir, APP_DIR), { recursive: true, mode: 0o700 });
+  const secret = randomHex();
+  const endpoint = socketPathIn(runtimeDir);
+  const received: Record<string, unknown>[] = [];
+  const requests: Record<string, unknown>[] = [];
+  const sockets: Socket[] = [];
+  const replayedServerNonce = randomHex();
+  const replayedProof = proof(secret, 'host', randomHex(), replayedServerNonce);
+  const injected = textResult(FIRST_REQUEST_ID, INJECTED_TEXT);
+  let handler: ((request: Record<string, unknown>) => unknown) | undefined;
+  const toLine = (message: unknown): string => `${JSON.stringify(message)}\n`;
+  const write = (socket: Socket, message: unknown): void => {
+    socket.write(toLine(message));
+  };
+  const server = createServer((socket) => {
+    sockets.push(socket);
+    socket.on('error', () => {});
+    let clientNonce: string | undefined;
+    let serverNonce: string | undefined;
+    let partial = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk: string) => {
+      const lines = (partial + chunk).split('\n');
+      partial = lines.pop() ?? '';
+      for (const line of lines) {
+        if (line.trim() === '') continue;
+        const message = JSON.parse(line) as Record<string, unknown>;
+        received.push(message);
+        if (message['type'] === 'hello') {
+          clientNonce = String(message['nonce']);
+          serverNonce = mode === 'replay-proof' ? replayedServerNonce : randomHex();
+          const hostProof = proof(mode === 'wrong-secret' ? randomHex() : secret, 'host', clientNonce, serverNonce);
+          if (mode === 'silent') continue;
+          if (mode === 'close-after-hello') socket.destroy();
+          else if (mode === 'ready-without-hello') write(socket, { type: 'ready' });
+          else if (mode === 'replay-proof') write(socket, { type: 'hello', nonce: serverNonce, proof: replayedProof });
+          else if (mode === 'short-proof') write(socket, { type: 'hello', nonce: serverNonce, proof: hostProof.slice(0, 62) });
+          else if (mode === 'non-hex-proof') write(socket, { type: 'hello', nonce: serverNonce, proof: 'zz'.repeat(32) });
+          else if (mode === 'response-after-hello') {
+            socket.write(toLine({ type: 'hello', nonce: serverNonce, proof: hostProof }) + toLine(injected));
+          } else write(socket, { type: 'hello', nonce: serverNonce, proof: hostProof });
+        } else if (message['type'] === 'auth') {
+          if (mode === 'no-ready') continue;
+          if (clientNonce && serverNonce && message['proof'] === proof(secret, 'client', clientNonce, serverNonce)) {
+            write(socket, mode === 'response-instead-of-ready' ? injected : { type: 'ready' });
+          } else socket.destroy();
+        } else {
+          requests.push(message);
+          const response = handler?.(message);
+          if (response !== undefined) write(socket, response);
+        }
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(endpoint, resolve));
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> =>
+    (closing ??= new Promise<void>((resolve) => {
+      for (const socket of sockets) socket.destroy();
+      server.close(() => resolve());
+    }));
+  onTestFinished(close);
+  writeFileSync(bridgeInfoPathIn(runtimeDir), JSON.stringify({ version: 1, endpoint, secret, pid: process.pid }), {
+    mode: 0o600,
+  });
+  return {
+    secret,
+    received,
+    requests,
+    connections: () => sockets.length,
+    answer: (message) => {
+      const socket = sockets.at(-1);
+      if (socket) write(socket, message);
+    },
+    respondWith: (next) => {
+      handler = next;
+    },
+    close,
   };
 }

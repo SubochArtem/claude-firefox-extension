@@ -1,22 +1,45 @@
 import { spawn } from 'node:child_process';
-import { chmodSync, mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { describe, expect, it, onTestFinished } from 'vitest';
-import { APP_DIR, hostEntry, startHost, tempDir, textResult, track, waitFor } from './helpers';
+import {
+  APP_DIR,
+  bridgeInfoPathIn,
+  childEnv,
+  hostEntry,
+  INJECTED_TEXT,
+  randomHex,
+  readBridgeJson,
+  sleep,
+  socketPathIn,
+  startFakeHost,
+  startHost,
+  tempDir,
+  textResult,
+  track,
+  waitFor,
+  type FakeHostMode,
+} from './helpers';
 
 const NOT_CONNECTED =
   'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
+const AUTH_FAILED = /^Authentication with the native host failed/;
 
 // StdioClientTransport always merges `env` into the SDK's reduced default environment (HOME, LOGNAME,
 // PATH, SHELL, TERM, USER), the same way Claude Code starts the server. Only XDG_RUNTIME_DIR is added,
-// to keep every test away from the user's real bridge socket directory.
-async function startMcp(runtimeDir: string): Promise<{ client: Client; stderr: () => string }> {
+// to keep every test away from the user's real bridge socket directory; `env` replaces it.
+async function startMcp(
+  runtimeDir: string,
+  env: Record<string, string> = { XDG_RUNTIME_DIR: runtimeDir },
+): Promise<{ client: Client; stderr: () => string }> {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: [hostEntry, '--mcp'],
-    env: { XDG_RUNTIME_DIR: runtimeDir },
+    env,
     stderr: 'pipe',
   });
   let stderr = '';
@@ -31,6 +54,11 @@ async function startMcp(runtimeDir: string): Promise<{ client: Client; stderr: (
 
 function callTabsContext(client: Client) {
   return client.callTool({ name: 'tabs_context', arguments: {} });
+}
+
+function errorText(result: Awaited<ReturnType<typeof callTabsContext>>): string {
+  expect(result.isError).toBe(true);
+  return (result.content as { text: string }[])[0]?.text ?? '';
 }
 
 describe.skipIf(process.platform === 'win32')('MCP server process', () => {
@@ -118,6 +146,7 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
     const runtimeDir = await tempDir();
     const first = await startHost(runtimeDir);
     first.respondWith((request) => textResult(request['id'], 'first'));
+    const firstSecret = readBridgeJson(bridgeInfoPathIn(runtimeDir)).secret;
     const { client } = await startMcp(runtimeDir);
     expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: 'first' }] });
 
@@ -127,6 +156,7 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
 
     const second = await startHost(runtimeDir);
     second.respondWith((request) => textResult(request['id'], 'second'));
+    expect(readBridgeJson(bridgeInfoPathIn(runtimeDir)).secret).not.toBe(firstSecret);
     expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: 'second' }] });
   });
 
@@ -141,6 +171,139 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
       content: [{ type: 'text', text: 'The Firefox extension disconnected' }],
       isError: true,
     });
+  });
+
+  it('returns the not-connected error when bridge.json points at a socket nobody listens on', async () => {
+    const runtimeDir = await tempDir();
+    mkdirSync(join(runtimeDir, APP_DIR), { mode: 0o700 });
+    writeFileSync(
+      bridgeInfoPathIn(runtimeDir),
+      JSON.stringify({ version: 1, endpoint: socketPathIn(runtimeDir), secret: randomHex(), pid: 999_999 }),
+      { mode: 0o600 },
+    );
+    const { client } = await startMcp(runtimeDir);
+    expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: NOT_CONNECTED }], isError: true });
+  });
+
+  it.each([
+    ['is not JSON', '{oops'],
+    ['has an unsupported version', JSON.stringify({ version: 2, endpoint: '/x', secret: 'ab'.repeat(32), pid: 1 })],
+  ])('returns a clear tool error when bridge.json %s', async (_label, content) => {
+    const runtimeDir = await tempDir();
+    mkdirSync(join(runtimeDir, APP_DIR), { mode: 0o700 });
+    writeFileSync(bridgeInfoPathIn(runtimeDir), content, { mode: 0o600 });
+    const { client } = await startMcp(runtimeDir);
+    const text = errorText(await callTabsContext(client));
+    expect(text.startsWith(`Could not reach the native host: Invalid bridge info file ${bridgeInfoPathIn(runtimeDir)}`), text).toBe(true);
+  });
+
+  it('authenticates with the secret from bridge.json before sending the tool request', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    const { client } = await startMcp(runtimeDir);
+    const call = callTabsContext(client);
+    const request = await waitFor(() => {
+      const found = host.requests[0];
+      if (!found) throw new Error('no tool request yet');
+      return found;
+    });
+    host.answer(textResult(request['id'], 'authenticated'));
+    expect(await call).toEqual({ content: [{ type: 'text', text: 'authenticated' }] });
+    expect(host.received.map((message) => message['type'])).toEqual(['hello', 'auth', 'tool_request']);
+    expect(host.received[0]).toEqual({ type: 'hello', nonce: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(JSON.stringify(host.received)).not.toContain(host.secret);
+    await host.close();
+  });
+
+  it.each<[string, FakeHostMode]>([
+    ['proves a different secret', 'wrong-secret'],
+    ['replays a host proof made for another client nonce', 'replay-proof'],
+    ['sends a short proof', 'short-proof'],
+    ['sends a non-hex proof', 'non-hex-proof'],
+    ['sends ready without proving the secret', 'ready-without-hello'],
+  ])('reports an authentication failure and sends neither auth nor a tool request when the host %s', async (_label, mode) => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir, mode);
+    const { client } = await startMcp(runtimeDir);
+    expect(errorText(await callTabsContext(client))).toMatch(AUTH_FAILED);
+    // A message written right before the failure would still be in flight.
+    await sleep(100);
+    expect(host.received.map((message) => message['type'])).toEqual(['hello']);
+    expect(host.requests).toEqual([]);
+    await host.close();
+  });
+
+  it('returns an error and sends no tool request when the host closes the connection after hello', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir, 'close-after-hello');
+    const { client } = await startMcp(runtimeDir);
+    errorText(await callTabsContext(client));
+    await sleep(100);
+    expect(host.received.map((message) => message['type'])).toEqual(['hello']);
+    expect(host.requests).toEqual([]);
+    await host.close();
+  });
+
+  it.each<[string, FakeHostMode]>([
+    ['right after its hello', 'response-after-hello'],
+    ['instead of ready', 'response-instead-of-ready'],
+  ])('reports an authentication failure when the host sends a tool response %s', async (_label, mode) => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir, mode);
+    // Makes an implementation that ignores the early response fail fast instead of timing out.
+    host.respondWith((request) => textResult(request['id'], 'answered after ready'));
+    const { client } = await startMcp(runtimeDir);
+    const text = errorText(await callTabsContext(client));
+    expect(text).toMatch(AUTH_FAILED);
+    expect(text).not.toContain(INJECTED_TEXT);
+    await sleep(100);
+    expect(host.requests).toEqual([]);
+    expect(host.received.map((message) => message['type'])).not.toContain('tool_request');
+    await host.close();
+  });
+
+  it('runs a single handshake for two concurrent first calls and sends both requests after auth', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    host.respondWith((request) => textResult(request['id'], `answer ${String(request['id'])}`));
+    const { client } = await startMcp(runtimeDir);
+    const results = await Promise.all([callTabsContext(client), callTabsContext(client)]);
+    const texts = results.map((result) => {
+      expect(result.isError).toBeFalsy();
+      return (result.content as { text: string }[])[0]?.text;
+    });
+    expect(new Set(texts)).toEqual(new Set(['answer 1', 'answer 2']));
+    expect(host.connections()).toBe(1);
+    expect(host.received.map((message) => message['type'])).toEqual(['hello', 'auth', 'tool_request', 'tool_request']);
+    await host.close();
+  });
+
+  it('re-reads bridge.json on the next call after an authentication failure', async () => {
+    const runtimeDir = await tempDir();
+    const impostor = await startFakeHost(runtimeDir, 'wrong-secret');
+    const { client } = await startMcp(runtimeDir);
+    expect(errorText(await callTabsContext(client))).toMatch(AUTH_FAILED);
+    await impostor.close();
+
+    const host = await startHost(runtimeDir);
+    host.respondWith((request) => textResult(request['id'], 'real host'));
+    expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: 'real host' }] });
+  });
+
+  it('re-reads bridge.json when a host restarts with a new secret on the same socket path', async () => {
+    const runtimeDir = await tempDir();
+    const first = await startFakeHost(runtimeDir);
+    first.respondWith((request) => textResult(request['id'], 'first'));
+    const { client } = await startMcp(runtimeDir);
+    expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: 'first' }] });
+    await first.close();
+
+    const second = await startFakeHost(runtimeDir);
+    expect(second.secret).not.toBe(first.secret);
+    second.respondWith((request) => textResult(request['id'], 'second'));
+    // A call that races the MCP server noticing the dropped connection may still report not-connected.
+    await waitFor(async () => expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: 'second' }] }));
+    await second.close();
   });
 
   it.each([
@@ -176,5 +339,32 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
     mcp.child.stdin.end();
     expect(await mcp.exited).toBe(0);
     expect(mcp.stderr()).toMatch(/exiting: stdin closed/);
+  });
+});
+
+describe.runIf(process.platform === 'win32')('MCP server on Windows', () => {
+  async function windowsTempDir(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'cfe-'));
+    onTestFinished(() => rm(dir, { recursive: true, force: true }));
+    return dir;
+  }
+
+  // The SDK merges `env` over its default environment, so the override is applied to that same base.
+  function mcpEnv(localAppData: string): Record<string, string> {
+    return childEnv({ LOCALAPPDATA: localAppData }, getDefaultEnvironment());
+  }
+
+  it('finds the host through bridge.json under LOCALAPPDATA and forwards a call over the pipe', async () => {
+    const localAppData = await windowsTempDir();
+    const host = await startHost(localAppData, { env: childEnv({ LOCALAPPDATA: localAppData }) });
+    host.respondWith((request) => textResult(request['id'], 'windows'));
+    const { client } = await startMcp(localAppData, mcpEnv(localAppData));
+    expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: 'windows' }] });
+  });
+
+  it('returns the not-connected error when there is no bridge.json', async () => {
+    const localAppData = await windowsTempDir();
+    const { client } = await startMcp(localAppData, mcpEnv(localAppData));
+    expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: NOT_CONNECTED }], isError: true });
   });
 });

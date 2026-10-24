@@ -1,39 +1,11 @@
-import { mkdirSync } from 'node:fs';
-import { createServer, type Socket } from 'node:net';
-import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { APP_DIR, socketPathIn, tempDir, textResult, waitFor } from './helpers';
+import { sleep, startFakeHost, tempDir, textResult, waitFor } from './helpers';
 
 const MCP_TIMEOUT_MS = 30_000;
+const HANDSHAKE_TIMEOUT_MS = 2_000;
+const AUTH_FAILED = /^Authentication with the native host failed/;
 const SIGNALS = ['exit', 'SIGINT', 'SIGTERM'] as const;
-
-// A fake native host on the bridge socket that records requests and answers only when told to.
-async function startFakeBridge(runtimeDir: string) {
-  mkdirSync(join(runtimeDir, APP_DIR), { mode: 0o700 });
-  const requests: Record<string, unknown>[] = [];
-  const sockets: Socket[] = [];
-  const server = createServer((socket) => {
-    sockets.push(socket);
-    let partial = '';
-    socket.setEncoding('utf8');
-    socket.on('data', (chunk: string) => {
-      const lines = (partial + chunk).split('\n');
-      partial = lines.pop() ?? '';
-      for (const line of lines) requests.push(JSON.parse(line) as Record<string, unknown>);
-    });
-  });
-  await new Promise<void>((resolve) => server.listen(socketPathIn(runtimeDir), resolve));
-  return {
-    requests,
-    answer: (message: unknown) => sockets[0]?.write(`${JSON.stringify(message)}\n`),
-    close: () =>
-      new Promise<void>((resolve) => {
-        for (const socket of sockets) socket.destroy();
-        server.close(() => resolve());
-      }),
-  };
-}
 
 // The 30 s timeout cannot be waited for in a child process, so this file runs the MCP server inside
 // the test worker with fake stdio, a stubbed process.exit and fake setTimeout. Sockets stay real.
@@ -113,18 +85,17 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('M
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const runtimeDir = await tempDir();
-    const bridge = await startFakeBridge(runtimeDir);
+    const bridge = await startFakeHost(runtimeDir);
     const mcp = await startInProcessMcp(runtimeDir);
     try {
       mcp.callTabsContext(1);
       await waitFor(() => expect(bridge.requests).toHaveLength(1));
       expect(bridge.requests[0]).toEqual({ type: 'tool_request', id: '1', tool: 'tabs_context', args: {} });
 
-      expect(vi.getTimerCount()).toBe(1);
       vi.advanceTimersByTime(MCP_TIMEOUT_MS - 1);
-      expect(vi.getTimerCount()).toBe(1);
+      await sleep(50);
+      expect(mcp.responses.find((message) => message['id'] === 1)).toBeUndefined();
       vi.advanceTimersByTime(1);
-      expect(vi.getTimerCount()).toBe(0);
       expect(await mcp.response(1)).toEqual({
         jsonrpc: '2.0',
         id: 1,
@@ -142,6 +113,36 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('M
         result: { content: [{ type: 'text', text: 'on time' }] },
       });
       expect(mcp.responses.filter((message) => message['id'] === 1)).toHaveLength(1);
+    } finally {
+      await mcp.stop();
+      await bridge.close();
+    }
+  });
+});
+
+describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('MCP server handshake timeout', () => {
+  it.each([
+    ['never answers hello', 'silent', ['hello']],
+    ['never sends ready', 'no-ready', ['hello', 'auth']],
+  ] as const)('reports an authentication failure after 2 s when the host %s', async (_label, mode, expected) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const runtimeDir = await tempDir();
+    const bridge = await startFakeHost(runtimeDir, mode);
+    const mcp = await startInProcessMcp(runtimeDir);
+    try {
+      mcp.callTabsContext(1);
+      await waitFor(() => expect(bridge.received.map((message) => message['type'])).toEqual(expected));
+      vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS - 1);
+      await sleep(50);
+      expect(mcp.responses.find((message) => message['id'] === 1)).toBeUndefined();
+      vi.advanceTimersByTime(1);
+      const response = await mcp.response(1);
+      expect(response).toMatchObject({ jsonrpc: '2.0', id: 1, result: { isError: true } });
+      const content = (response['result'] as { content: { type: string; text: string }[] }).content;
+      expect(content).toEqual([{ type: 'text', text: expect.stringMatching(AUTH_FAILED) }]);
+      expect(bridge.requests).toEqual([]);
+      expect(bridge.received.map((message) => message['type'])).toEqual(expected);
     } finally {
       await mcp.stop();
       await bridge.close();
