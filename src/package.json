@@ -9,6 +9,8 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p extension && tsc --noEmit -p host",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "lint": "web-ext lint",
     "start": "web-ext run",
     "install-host": "node scripts/install-host.mjs",
@@ -19,6 +21,7 @@
     "@types/node": "^26.6.5",
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
     "web-ext": "^10.8.0"
   },
   "dependencies": {

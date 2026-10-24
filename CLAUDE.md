@@ -42,7 +42,7 @@ Each feature is its own branch from `main`. The feature's last commit marks it `
 - [x] `feature/project-setup`: `package.json`, `tsconfig`, `web-ext`, build, folder structure; fill in Repository layout and Commands below.
 - [x] `feature/extension-skeleton`: Firefox MV3 `manifest.json` and background script; the extension loads without errors.
 - [x] `feature/native-bridge`: native host + MCP server, end-to-end on the first tool `tabs_context`; install/registration of the native messaging manifest.
-- [ ] `feature/tests`: Vitest setup and `npm test`; tests for the existing host (native messaging framing, JSON lines, client multiplexing, timeouts, socket directory checks, MCP server against a fake extension) and the extension tool registry / `tabs_context` with a mocked `browser.*`.
+- [x] `feature/tests`: Vitest setup and `npm test`; tests for the existing host (native messaging framing, JSON lines, client multiplexing, timeouts, socket directory checks, MCP server against a fake extension) and the extension tool registry / `tabs_context` with a mocked `browser.*`.
 - [ ] `feature/windows-support`: named pipe restricted to the current user, installer writing `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` and a `.cmd` wrapper, Windows paths in host and scripts.
 - [ ] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
 - [ ] `feature/screenshot`: screenshots via `tabs.captureVisibleTab`.
@@ -59,14 +59,19 @@ src/                   npm package root; every command is run from here
   package.json
   package-lock.json
   tsconfig.base.json   shared strict compiler options (no emit)
-  tsconfig.json        type check for build scripts and web-ext config (Node types, no DOM)
+  tsconfig.json        type check for build scripts, their tests, web-ext and Vitest config (Node types, no DOM)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
+  vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), scripts
   scripts/build.mjs    esbuild bundling of extension/ into dist/extension and host/ into dist/host
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS)
+  scripts/test/        installer tests (run a copy of the installer against a temp HOME)
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
-    tsconfig.json      extension type check (DOM + WebExtension types, no Node)
+    tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
+    test/              unit tests with a mocked `browser` global (browser-mock.ts); not copied into dist
   host/                native messaging host + MCP server, one entry point
-    tsconfig.json      host type check (Node types, no DOM)
+    tsconfig.json      host type check (Node types, no DOM), test/ included
+    test/              unit tests, process tests against the bundled host, in-process timeout tests with fake timers;
+                       helpers.ts (temp dirs under /tmp, fake extension, bridge client), global-setup.ts
     index.ts           dispatches by flag: --native-host or --mcp
     protocol.ts        message types for both channels, shared constants
     socket-path.ts     bridge socket path resolution and permissions
@@ -86,8 +91,8 @@ Run every command from `src/` (`cd src && npm run build`).
 
 - `npm install`: install dependencies.
 - `npm run build`: bundle `extension/` into `dist/extension` and `host/` into `dist/host`.
-- `npm run typecheck`: type-check the root project (build scripts), `extension/` and `host/` with `tsc --noEmit`.
-- `npm test`: run the Vitest suite (comes with `feature/tests`, not available yet).
+- `npm run typecheck`: type-check the root project (build scripts, installer tests, Vitest config), `extension/` and `host/` (each with its tests) with `tsc --noEmit`.
+- `npm test`: run the Vitest suite once (no build, Firefox or network needed; temp dirs under `/tmp`, never the real bridge socket directory or `~/.mozilla`). `npm run test:watch` runs it in watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).
 - `npm run start`: run the built extension in a temporary Firefox profile with `web-ext run` (build first).
 - `npm run install-host`: register the native messaging host for Firefox (build first): writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary (`~/.local/share/claude-firefox-extension/native-host` on Linux, `~/Library/Application Support/claude-firefox-extension/native-host` on macOS) and the manifest `claude_firefox_extension.json` (`~/.mozilla/native-messaging-hosts/` on Linux, `~/Library/Application Support/Mozilla/NativeMessagingHosts/` on macOS). Prints the `claude mcp add` command. Windows, Snap and Flatpak Firefox are not supported.

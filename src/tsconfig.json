@@ -6,5 +6,5 @@
     "allowJs": true,
     "checkJs": true
   },
-  "include": ["scripts/**/*.mjs", "web-ext-config.mjs"]
+  "include": ["scripts/**/*.mjs", "scripts/**/*.ts", "web-ext-config.mjs", "vitest.config.ts"]
 }

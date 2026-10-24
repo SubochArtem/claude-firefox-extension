@@ -1,5 +1,5 @@
 import { lstatSync, rmSync } from 'node:fs';
-import { lstat, rm } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
 import { readJsonLines, writeJsonLine } from './json-lines';
 import { readNativeMessages, writeNativeMessage } from './native-messaging';
@@ -41,6 +41,8 @@ const clients = new Map<number, Client>();
 const pending = new Map<string, PendingRequest>();
 let nextClientId = 1;
 let shuttingDown = false;
+// Undefined until this process has bound the socket path and recorded what it created there.
+let socketIdentity: SocketIdentity | undefined;
 
 function isSocketAlive(path: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -145,7 +147,7 @@ function handleExtensionMessage(message: unknown): void {
   respond(entry.client, { ...parsed, id: entry.originalId });
 }
 
-function shutdown(server: Server, socketPath: string, identity: SocketIdentity, reason: string): void {
+function shutdown(server: Server, socketPath: string, reason: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
   console.error(`${LOG} shutting down: ${reason}`);
@@ -158,7 +160,8 @@ function shutdown(server: Server, socketPath: string, identity: SocketIdentity, 
   setTimeout(() => process.exit(0), SHUTDOWN_GRACE_MS).unref();
   // libuv unlinks the listening path on close without checking what it points to. If another
   // host has replaced the socket file, skip close() and let the grace timer end the process.
-  if (isOwnSocket(socketPath, identity)) server.close(() => process.exit(0));
+  if (socketIdentity && isOwnSocket(socketPath, socketIdentity)) server.close(() => process.exit(0));
+  else if (!server.listening) process.exit(0);
 }
 
 export async function runNativeHost(): Promise<void> {
@@ -166,6 +169,21 @@ export async function runNativeHost(): Promise<void> {
   const socketPath = bridgeSocketPath();
 
   const server = createServer(handleConnection);
+  // server.close() unlinks the socket, but process.exit() and crashes skip it. A newer host may
+  // own the path by then, so only the file this process created is removed.
+  process.on('exit', () => {
+    if (socketIdentity && isOwnSocket(socketPath, socketIdentity)) rmSync(socketPath, { force: true });
+  });
+  // Firefox closes stdin when the extension's port disconnects; that is the host's signal to exit.
+  readNativeMessages(process.stdin, handleExtensionMessage);
+  process.stdin.on('end', () => shutdown(server, socketPath, 'stdin closed'));
+  process.stdin.on('error', (error) => shutdown(server, socketPath, `stdin error: ${error.message}`));
+  process.stdout.on('error', (error) => shutdown(server, socketPath, `stdout error: ${error.message}`));
+  // Attached before listening, so a signal during startup runs shutdown and the exit hook instead
+  // of Node's default action, which would leave the socket file behind.
+  process.on('SIGINT', () => shutdown(server, socketPath, 'SIGINT'));
+  process.on('SIGTERM', () => shutdown(server, socketPath, 'SIGTERM'));
+
   try {
     await listen(server, socketPath);
   } catch (error) {
@@ -177,21 +195,23 @@ export async function runNativeHost(): Promise<void> {
     await rm(socketPath, { force: true });
     await listen(server, socketPath);
   }
-  const { dev, ino } = await lstat(socketPath);
-  const identity: SocketIdentity = { dev, ino };
-  // server.close() unlinks the socket, but process.exit() and crashes skip it. A newer host may
-  // own the path by then, so only the file this process created is removed.
-  process.on('exit', () => {
-    if (isOwnSocket(socketPath, identity)) rmSync(socketPath, { force: true });
-  });
-  await restrictBridgeSocket(socketPath);
+  // Synchronous on purpose: listen() binds synchronously and resolves from process.nextTick, and
+  // signal handlers only run from the event loop, so none can run between the bind and this line.
+  const { dev, ino } = lstatSync(socketPath);
+  socketIdentity = { dev, ino };
+  // Events queued with process.nextTick (stdin 'end', stream 'error') can run shutdown in that gap,
+  // when it has no identity yet and closes nothing; the server is known to be ours now, so close it.
+  if (shuttingDown) {
+    server.close(() => process.exit(0));
+    return;
+  }
+  try {
+    await restrictBridgeSocket(socketPath);
+  } catch (error) {
+    // A shutdown during startup may already have closed the server and removed the socket.
+    if (shuttingDown) return;
+    throw error;
+  }
+  if (shuttingDown) return;
   console.error(`${LOG} listening on ${socketPath}`);
-
-  // Firefox closes stdin when the extension's port disconnects; that is the host's signal to exit.
-  readNativeMessages(process.stdin, handleExtensionMessage);
-  process.stdin.on('end', () => shutdown(server, socketPath, identity, 'stdin closed'));
-  process.stdin.on('error', (error) => shutdown(server, socketPath, identity, `stdin error: ${error.message}`));
-  process.stdout.on('error', (error) => shutdown(server, socketPath, identity, `stdout error: ${error.message}`));
-  process.on('SIGINT', () => shutdown(server, socketPath, identity, 'SIGINT'));
-  process.on('SIGTERM', () => shutdown(server, socketPath, identity, 'SIGTERM'));
 }
