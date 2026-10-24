@@ -4,16 +4,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import packageJson from '../package.json' with { type: 'json' };
 import { readBridgeInfo } from './bridge-info';
-import {
-  clientProof,
-  createNonce,
-  HANDSHAKE_TIMEOUT_MS,
-  hostProof,
-  parseHostHello,
-  parseReady,
-  verifyProof,
-} from './handshake';
-import { readJsonLines, writeJsonLine } from './json-lines';
+import { authenticateToHost, HandshakeError } from './handshake';
+import { writeJsonLine } from './json-lines';
 import { parseToolResponse, TOOL_REQUEST_TIMEOUT_MS, type ToolRequest, type ToolResponse } from './protocol';
 import { checkBridgeSocketDir } from './socket-path';
 
@@ -28,12 +20,13 @@ class AuthenticationError extends Error {
 }
 
 interface PendingCall {
+  socket: Socket;
   resolve: (response: ToolResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 }
 
-class BridgeConnection {
+export class BridgeConnection {
   private socket: Socket | undefined;
   private connecting: Promise<Socket> | undefined;
   private readonly pending = new Map<string, PendingCall>();
@@ -62,7 +55,7 @@ class BridgeConnection {
           this.pending.delete(id);
           reject(new Error(`${tool} timed out after ${TOOL_REQUEST_TIMEOUT_MS / 1000} s`));
         }, TOOL_REQUEST_TIMEOUT_MS);
-        this.pending.set(id, { resolve, reject, timer });
+        this.pending.set(id, { socket, resolve, reject, timer });
         writeJsonLine(socket, request, (error) => {
           if (!error || !this.pending.has(id)) return;
           clearTimeout(timer);
@@ -80,6 +73,9 @@ class BridgeConnection {
   // Concurrent calls share one connection attempt and one handshake. bridge.json is read on every
   // attempt, because a restarted host has a new secret and, on Windows, a new pipe name.
   private connect(): Promise<Socket> {
+    // A socket is destroyed synchronously but its 'close' event follows later, so a dead socket can
+    // still be cached here; it is dropped instead of being handed to another call.
+    if (this.socket?.destroyed) this.socket = undefined;
     if (this.socket) return Promise.resolve(this.socket);
     this.connecting ??= this.open().finally(() => {
       this.connecting = undefined;
@@ -99,64 +95,14 @@ class BridgeConnection {
         resolve(socket);
       });
     });
-    await this.authenticate(socket, secret);
+    try {
+      await authenticateToHost(socket, secret, { logPrefix: LOG, onMessage: (message) => this.handleMessage(socket, message) });
+    } catch (error) {
+      if (error instanceof HandshakeError) throw new AuthenticationError(error.message);
+      throw error;
+    }
     this.attach(socket);
     return socket;
-  }
-
-  // The host proves it knows the secret before the client reveals its own proof, so a process that
-  // took over the endpoint learns nothing it could replay. Nothing but the handshake is accepted
-  // before ready: a tool response from an unauthenticated peer must never reach a caller.
-  private authenticate(socket: Socket, secret: string): Promise<void> {
-    return new Promise((resolve, reject) => {
-      const clientNonce = createNonce();
-      let serverNonce: string | undefined;
-      let settled = false;
-      let ready = false;
-      const fail = (reason: string): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        socket.destroy();
-        reject(new AuthenticationError(reason));
-      };
-      const timer = setTimeout(() => fail(`no ready within ${HANDSHAKE_TIMEOUT_MS / 1000} s`), HANDSHAKE_TIMEOUT_MS);
-      const onClose = (): void => fail('the native host closed the connection');
-      socket.once('close', onClose);
-      readJsonLines(
-        socket,
-        (message) => {
-          if (ready) {
-            this.handleMessage(message);
-            return;
-          }
-          if (settled) return;
-          if (serverNonce === undefined) {
-            const hello = parseHostHello(message);
-            if (!hello) return fail('expected hello from the native host');
-            if (!verifyProof(hostProof(secret, clientNonce, hello.nonce), hello.proof)) {
-              return fail('the native host could not prove it knows the secret from bridge.json');
-            }
-            serverNonce = hello.nonce;
-            writeJsonLine(socket, { type: 'auth', proof: clientProof(secret, clientNonce, serverNonce) });
-            return;
-          }
-          if (!parseReady(message)) return fail('expected ready from the native host');
-          settled = true;
-          ready = true;
-          clearTimeout(timer);
-          socket.off('close', onClose);
-          resolve();
-        },
-        LOG,
-        {
-          onInvalidJson: () => {
-            if (!ready) fail('the native host sent invalid JSON');
-          },
-        },
-      );
-      writeJsonLine(socket, { type: 'hello', nonce: clientNonce });
-    });
   }
 
   close(): void {
@@ -172,28 +118,30 @@ class BridgeConnection {
       return;
     }
     this.socket = socket;
+    // The close event of a socket that has already been replaced must not drop the new connection.
     socket.on('close', () => {
-      this.socket = undefined;
-      this.rejectPending(new Error(NOT_CONNECTED_MESSAGE));
+      if (this.socket === socket) this.socket = undefined;
+      this.rejectPending(new Error(NOT_CONNECTED_MESSAGE), socket);
     });
   }
 
-  private rejectPending(error: Error): void {
+  private rejectPending(error: Error, socket?: Socket): void {
     for (const [id, call] of this.pending) {
+      if (socket && call.socket !== socket) continue;
       clearTimeout(call.timer);
       call.reject(error);
       this.pending.delete(id);
     }
   }
 
-  private handleMessage(message: unknown): void {
+  private handleMessage(socket: Socket, message: unknown): void {
     const response = parseToolResponse(message);
     if (!response) {
       console.error(`${LOG} native host sent an invalid message`);
       return;
     }
     const call = this.pending.get(response.id);
-    if (!call) return;
+    if (call?.socket !== socket) return;
     clearTimeout(call.timer);
     this.pending.delete(response.id);
     call.resolve(response);

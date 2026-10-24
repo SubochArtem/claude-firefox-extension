@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { endianness } from 'node:os';
+import { endianness, tmpdir } from 'node:os';
 import { createConnection, createServer, type Socket } from 'node:net';
 import { dirname, join } from 'node:path';
 import { inject, onTestFinished } from 'vitest';
@@ -35,7 +35,7 @@ export function sleep(ms: number): Promise<void> {
 
 // Short paths under the literal /tmp keep the socket path far below the 107-byte sun_path limit.
 export async function tempDir(): Promise<string> {
-  const dir = await mkdtemp('/tmp/cfe-');
+  const dir = await mkdtemp(process.platform === 'win32' ? join(tmpdir(), 'cfe-') : '/tmp/cfe-');
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
@@ -297,6 +297,7 @@ export type FakeHostMode =
   | 'close-after-hello'
   | 'ready-without-hello'
   | 'no-ready'
+  | 'close-after-ready'
   | 'response-after-hello'
   | 'response-instead-of-ready';
 
@@ -309,6 +310,7 @@ export interface FakeHost {
   received: Record<string, unknown>[];
   requests: Record<string, unknown>[];
   connections: () => number;
+  closedConnections: () => number;
   answer: (message: unknown) => void;
   respondWith: (handler: (request: Record<string, unknown>) => unknown) => void;
   close: () => Promise<void>;
@@ -323,7 +325,8 @@ export interface FakeHost {
 // - 'short-proof' and 'non-hex-proof' send a malformed proof;
 // - 'response-after-hello' writes a tool_response for the first request id in the same write as its
 //   hello, then completes the handshake;
-// - 'response-instead-of-ready' accepts the auth but sends that tool_response instead of ready.
+// - 'response-instead-of-ready' accepts the auth but sends that tool_response instead of ready;
+// - 'close-after-ready' sends ready and ends the connection in the same call.
 // Every line the MCP server sends lands in `received`; `requests` holds the lines that are not part
 // of the handshake.
 export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'normal'): Promise<FakeHost> {
@@ -333,6 +336,7 @@ export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'no
   const received: Record<string, unknown>[] = [];
   const requests: Record<string, unknown>[] = [];
   const sockets: Socket[] = [];
+  let closedConnections = 0;
   const replayedServerNonce = randomHex();
   const replayedProof = proof(secret, 'host', randomHex(), replayedServerNonce);
   const injected = textResult(FIRST_REQUEST_ID, INJECTED_TEXT);
@@ -344,6 +348,7 @@ export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'no
   const server = createServer((socket) => {
     sockets.push(socket);
     socket.on('error', () => {});
+    socket.on('close', () => closedConnections++);
     let clientNonce: string | undefined;
     let serverNonce: string | undefined;
     let partial = '';
@@ -371,7 +376,8 @@ export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'no
         } else if (message['type'] === 'auth') {
           if (mode === 'no-ready') continue;
           if (clientNonce && serverNonce && message['proof'] === proof(secret, 'client', clientNonce, serverNonce)) {
-            write(socket, mode === 'response-instead-of-ready' ? injected : { type: 'ready' });
+            if (mode === 'close-after-ready') socket.end(toLine({ type: 'ready' }));
+            else write(socket, mode === 'response-instead-of-ready' ? injected : { type: 'ready' });
           } else socket.destroy();
         } else {
           requests.push(message);
@@ -397,6 +403,7 @@ export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'no
     received,
     requests,
     connections: () => sockets.length,
+    closedConnections: () => closedConnections,
     answer: (message) => {
       const socket = sockets.at(-1);
       if (socket) write(socket, message);

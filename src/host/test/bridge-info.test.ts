@@ -1,13 +1,16 @@
+import { randomBytes } from 'node:crypto';
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { mkdtemp, open, rm } from 'node:fs/promises';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
+import { inspect } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bridgeInfoDir,
   newBridgeInfo,
   readBridgeInfo,
   removeBridgeInfoIfOwn,
+  removeBridgeInfoTempFiles,
   writeBridgeInfo,
   type BridgeInfo,
 } from '../bridge-info';
@@ -228,6 +231,25 @@ describe('writeBridgeInfo and readBridgeInfo', () => {
     writeFileSync(file, content);
     await expect(readBridgeInfo(tempDir)).rejects.toThrow(`Invalid bridge info file ${file}`);
   });
+
+  // JSON.parse messages quote the text around the error position, which here would be the secret.
+  it.each([
+    ['is truncated after the secret', (secret: string) => `{"version":1,"endpoint":"/x/bridge.sock","secret":"${secret}`],
+    ['has the secret unquoted', (secret: string) => `{"version":1,"endpoint":"/x/bridge.sock","secret":${secret}}`],
+    ['has garbage right after the secret', (secret: string) => `{"secret":"${secret}"x, "pid": 1}`],
+    ['is the bare secret', (secret: string) => secret],
+  ])('keeps the file content out of the error when the JSON %s', async (_label, content) => {
+    const secret = 'c0ffee'.repeat(10) + 'beef';
+    const file = join(tempDir, FILE_NAME);
+    writeFileSync(file, content(secret));
+    const error = await readBridgeInfo(tempDir).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`Invalid bridge info file ${file}: not valid JSON`);
+    expect(inspect(error)).not.toContain(secret.slice(0, 8));
+  });
 });
 
 describe('removeBridgeInfoIfOwn', () => {
@@ -256,5 +278,30 @@ describe('removeBridgeInfoIfOwn', () => {
     writeFileSync(join(tempDir, FILE_NAME), '{oops');
     expect(removeBridgeInfoIfOwn(sampleInfo(), tempDir)).toBe(false);
     expect(readFileSync(join(tempDir, FILE_NAME), 'utf8')).toBe('{oops');
+  });
+});
+
+describe('removeBridgeInfoTempFiles', () => {
+  const hex = (): string => randomBytes(8).toString('hex');
+
+  it('removes only the temp files of the given pid', () => {
+    const own = [`${FILE_NAME}.42.${hex()}.tmp`, `${FILE_NAME}.42.${hex()}.tmp`];
+    const kept = [FILE_NAME, `${FILE_NAME}.4242.${hex()}.tmp`, `${FILE_NAME}.7.${hex()}.tmp`, `other.json.42.${hex()}.tmp`];
+    for (const name of [...own, ...kept]) writeFileSync(join(tempDir, name), JSON.stringify(sampleInfo()));
+    removeBridgeInfoTempFiles(tempDir, 42);
+    expect(readdirSync(tempDir).sort()).toEqual([...kept].sort());
+  });
+
+  it('defaults to the temp files of this process', () => {
+    const own = `${FILE_NAME}.${process.pid}.${hex()}.tmp`;
+    const other = `${FILE_NAME}.${process.pid + 1}.${hex()}.tmp`;
+    writeFileSync(join(tempDir, own), '');
+    writeFileSync(join(tempDir, other), '');
+    removeBridgeInfoTempFiles(tempDir);
+    expect(readdirSync(tempDir)).toEqual([other]);
+  });
+
+  it('does not throw when the directory does not exist', () => {
+    expect(() => removeBridgeInfoTempFiles(join(tempDir, 'missing'), 42)).not.toThrow();
   });
 });

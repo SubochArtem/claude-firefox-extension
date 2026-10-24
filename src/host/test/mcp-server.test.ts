@@ -197,6 +197,31 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
     expect(text.startsWith(`Could not reach the native host: Invalid bridge info file ${bridgeInfoPathIn(runtimeDir)}`), text).toBe(true);
   });
 
+  it('keeps the content of an invalid bridge.json out of the tool error and the log', async () => {
+    const runtimeDir = await tempDir();
+    mkdirSync(join(runtimeDir, APP_DIR), { mode: 0o700 });
+    const secret = randomHex();
+    writeFileSync(bridgeInfoPathIn(runtimeDir), `{"version":1,"endpoint":"/x","secret":"${secret}`, { mode: 0o600 });
+    const { client, stderr } = await startMcp(runtimeDir);
+    expect(await callTabsContext(client)).toEqual({
+      content: [{ type: 'text', text: `Could not reach the native host: Invalid bridge info file ${bridgeInfoPathIn(runtimeDir)}: not valid JSON` }],
+      isError: true,
+    });
+    expect(stderr()).not.toContain(secret.slice(0, 8));
+  });
+
+  it('reconnects to a new host after one closed the connection right after ready', async () => {
+    const runtimeDir = await tempDir();
+    const flaky = await startFakeHost(runtimeDir, 'close-after-ready');
+    const { client } = await startMcp(runtimeDir);
+    errorText(await callTabsContext(client));
+    await flaky.close();
+
+    const host = await startFakeHost(runtimeDir);
+    host.respondWith((request) => textResult(request['id'], 'after reconnect'));
+    expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: 'after reconnect' }] });
+  });
+
   it('authenticates with the secret from bridge.json before sending the tool request', async () => {
     const runtimeDir = await tempDir();
     const host = await startFakeHost(runtimeDir);

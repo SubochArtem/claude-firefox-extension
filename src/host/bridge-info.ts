@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { readFileSync, rmSync } from 'node:fs';
+import { readdirSync, readFileSync, rmSync } from 'node:fs';
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir as osHomedir } from 'node:os';
 import { join, win32 } from 'node:path';
@@ -85,8 +85,9 @@ export async function readBridgeInfo(dir = bridgeInfoDir()): Promise<BridgeInfo>
   let value: unknown;
   try {
     value = JSON.parse(text);
-  } catch (error) {
-    throw new Error(`Invalid bridge info file ${file}: ${(error as Error).message}`);
+  } catch {
+    // JSON.parse messages quote the text around the error position, which may be the secret.
+    throw new Error(`Invalid bridge info file ${file}: not valid JSON`);
   }
   const info = parseBridgeInfo(value);
   if (!info) {
@@ -106,5 +107,26 @@ export function removeBridgeInfoIfOwn(info: BridgeInfo, dir = bridgeInfoDir()): 
     return true;
   } catch {
     return false;
+  }
+}
+
+// Synchronous so it can run from a process 'exit' listener: a host that exits while writeBridgeInfo is
+// between creating its temp file and renaming it would otherwise leave a copy of its secret behind.
+export function removeBridgeInfoTempFiles(dir = bridgeInfoDir(), pid = process.pid): void {
+  const prefix = `${FILE_NAME}.${pid}.`;
+  const suffix = '.tmp';
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!name.startsWith(prefix) || !name.endsWith(suffix) || name.length <= prefix.length + suffix.length) continue;
+    try {
+      rmSync(join(dir, name), { force: true });
+    } catch {
+      // Best effort: another process may hold the file open on Windows.
+    }
   }
 }

@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -13,7 +14,7 @@ declare module 'vitest' {
 // Bundles the host into a temp dir instead of running scripts/build.mjs: that script replaces dist/,
 // which the installed native messaging wrapper runs.
 export default async function setup(project: TestProject): Promise<() => Promise<void>> {
-  const outDir = await mkdtemp('/tmp/cfe-host-');
+  const outDir = await mkdtemp(process.platform === 'win32' ? join(tmpdir(), 'cfe-host-') : '/tmp/cfe-host-');
   const hostEntry = join(outDir, 'index.js');
   await build({
     entryPoints: [fileURLToPath(new URL('../index.ts', import.meta.url))],

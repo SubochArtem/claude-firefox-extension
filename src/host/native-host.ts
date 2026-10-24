@@ -1,7 +1,15 @@
 import { lstatSync, rmSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
-import { bridgeInfoDir, newBridgeInfo, removeBridgeInfoIfOwn, writeBridgeInfo, type BridgeInfo } from './bridge-info';
+import {
+  bridgeInfoDir,
+  newBridgeInfo,
+  readBridgeInfo,
+  removeBridgeInfoIfOwn,
+  removeBridgeInfoTempFiles,
+  writeBridgeInfo,
+  type BridgeInfo,
+} from './bridge-info';
 import {
   clientProof,
   createNonce,
@@ -12,6 +20,7 @@ import {
   parseClientHello,
   verifyProof,
 } from './handshake';
+import { isAuthenticatedHostAlive } from './host-probe';
 import { MAX_LINE_BYTES, readJsonLines, writeJsonLine } from './json-lines';
 import { listen, listenWithRetry } from './listen';
 import { readNativeMessages, writeNativeMessage } from './native-messaging';
@@ -81,6 +90,19 @@ function isOwnSocket(path: string, identity: SocketIdentity): boolean {
   } catch {
     return false;
   }
+}
+
+// Windows pipes get a random name, so a second host never collides with the first on bind and would
+// silently take bridge.json over. The pid in bridge.json is not trusted for this: a recycled pid
+// proves nothing, so only a host that completes the handshake with the recorded secret counts.
+async function isOtherHostRunning(): Promise<boolean> {
+  let existing: BridgeInfo;
+  try {
+    existing = await readBridgeInfo();
+  } catch {
+    return false;
+  }
+  return isAuthenticatedHostAlive(existing);
 }
 
 function sendToExtension(message: HostToExtensionMessage): boolean {
@@ -239,6 +261,7 @@ export async function runNativeHost(): Promise<void> {
   // own the path and bridge.json by then, so only what this process created is removed.
   process.on('exit', () => {
     if (bridgeInfo) removeBridgeInfoIfOwn(bridgeInfo);
+    removeBridgeInfoTempFiles();
     if (socketPath && socketIdentity && isOwnSocket(socketPath, socketIdentity)) rmSync(socketPath, { force: true });
   });
   // Firefox closes stdin when the extension's port disconnects; that is the host's signal to exit.
@@ -284,6 +307,16 @@ export async function runNativeHost(): Promise<void> {
     // A shutdown during startup may already have closed the server and removed the socket.
     if (shuttingDown) return;
     throw error;
+  }
+  if (shuttingDown) return;
+
+  if (isWindows && (await isOtherHostRunning())) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.error(`${LOG} another native host is already running, exiting`);
+    setTimeout(() => process.exit(1), SHUTDOWN_GRACE_MS).unref();
+    server.close(() => process.exit(1));
+    return;
   }
   if (shuttingDown) return;
 

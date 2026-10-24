@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -286,6 +286,19 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
     expect(await client.nextLine()).toEqual(textResult('1', 'newer'));
   });
 
+  it('removes its own leftover bridge.json temp files on exit and keeps those of other processes', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startHost(runtimeDir);
+    const own = join(runtimeDir, APP_DIR, `bridge.json.${host.child.pid}.${randomHex(8)}.tmp`);
+    const other = join(runtimeDir, APP_DIR, `bridge.json.${process.pid}.${randomHex(8)}.tmp`);
+    writeFileSync(own, '{}');
+    writeFileSync(other, '{}');
+    host.child.stdin.end();
+    expect(await host.exited).toBe(0);
+    expect(existsSync(own)).toBe(false);
+    expect(existsSync(other)).toBe(true);
+  });
+
   it('exits 1 without listening when the socket directory is not private', async () => {
     const runtimeDir = await tempDir();
     mkdirSync(join(runtimeDir, APP_DIR));
@@ -512,6 +525,35 @@ describe.runIf(process.platform === 'win32')('native host on Windows', () => {
 
     await startWindowsHost(localAppData);
     expect(readBridgeJson(infoPath).endpoint).not.toBe(firstEndpoint);
+  });
+
+  it('exits 1 and leaves bridge.json alone when an authenticated host is already running', async () => {
+    const localAppData = await windowsTempDir();
+    const infoPath = join(localAppData, APP_DIR, 'bridge.json');
+    const first = await startWindowsHost(localAppData);
+    const info = readBridgeJson(infoPath);
+
+    const second = await startHost(localAppData, { waitUntilListening: false, env: childEnv({ LOCALAPPDATA: localAppData }) });
+    expect(await second.exited).toBe(1);
+    expect(second.stderr().trim()).not.toBe('');
+    expect(readBridgeJson(infoPath)).toEqual(info);
+
+    first.respondWith((request) => textResult(request['id'], 'first'));
+    const client = await connectClient(info.endpoint, info.secret);
+    client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
+    expect(await client.nextLine()).toEqual(textResult('1', 'first'));
+  });
+
+  it('replaces a bridge.json whose endpoint has no authenticated host', async () => {
+    const localAppData = await windowsTempDir();
+    const infoPath = join(localAppData, APP_DIR, 'bridge.json');
+    mkdirSync(join(localAppData, APP_DIR), { recursive: true });
+    const stale = { version: 1, endpoint: `\\\\.\\pipe\\${APP_DIR}-${randomHex(16)}`, secret: randomHex(), pid: 999_999 };
+    writeFileSync(infoPath, JSON.stringify(stale));
+    const host = await startWindowsHost(localAppData);
+    const info = readBridgeJson(infoPath);
+    expect(info.pid).toBe(host.child.pid);
+    expect(info.endpoint).not.toBe(stale.endpoint);
   });
 
   it('rejects a client with the wrong secret on the pipe', async () => {
