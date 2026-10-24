@@ -27,6 +27,9 @@ The native host is a local program installed on the user's machine, not a hosted
 - Native host and MCP server: Node.js + TypeScript, official `@modelcontextprotocol/sdk`.
 - Target: current Firefox release (158), Manifest V3.
 - All project code and tooling live under `src/`: `src/package.json` is the npm root (`src/extension`, `src/host`); build output goes to `src/dist/`.
+- Extension id: `claude-firefox-extension@localhost`. The native messaging host manifest's `allowed_extensions` must match it.
+- Permissions and host permissions are added in the feature that first needs them, not up front.
+- Firefox MV3 host permissions are opt-in for the user: a feature that needs them must document granting them in `about:addons` or request them at runtime.
 - Open: how the MCP process and the native messaging process connect (local Unix socket vs. localhost WebSocket with a token). Decide at the start of `feature/native-bridge`, after the researcher explains how Claude in Chrome does it.
 
 ## Roadmap
@@ -34,7 +37,7 @@ The native host is a local program installed on the user's machine, not a hosted
 Each feature is its own branch from `main`. The feature's last commit marks it `[x]` here.
 
 - [x] `feature/project-setup`: `package.json`, `tsconfig`, `web-ext`, build, folder structure; fill in Repository layout and Commands below.
-- [ ] `feature/extension-skeleton`: Firefox MV3 `manifest.json` and background script; the extension loads without errors.
+- [x] `feature/extension-skeleton`: Firefox MV3 `manifest.json` and background script; the extension loads without errors.
 - [ ] `feature/native-bridge`: native host + MCP server, end-to-end on the first tool `tabs_context`; install/registration of the native messaging manifest.
 - [ ] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
 - [ ] `feature/screenshot`: screenshots via `tabs.captureVisibleTab`.
@@ -53,7 +56,7 @@ src/                   npm package root; every command is run from here
   tsconfig.json        strict type check for the extension and build scripts (no emit)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
   scripts/build.mjs    esbuild bundling of extension/ into dist/extension; entry points are listed here
-  extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets (from feature/extension-skeleton)
+  extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
   host/                native messaging host + MCP server (from feature/native-bridge)
   node_modules/        (not committed)
   dist/extension/      built extension, loaded by web-ext (not committed)
