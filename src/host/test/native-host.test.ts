@@ -479,6 +479,40 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
     expect(await last.nextLine()).toEqual(textResult('1', 'ok'));
     expect([...authenticated, ...idle].every((client) => !client.isClosed())).toBe(true);
   });
+
+  it('frees exactly one slot per closed connection whatever closed it, so at most 8 stay unauthenticated afterwards', async () => {
+    const host = await startHost(await tempDir());
+    // Over the cap: eight closed by the handshake timeout, one destroyed on connect without a slot.
+    const timedOut = await Promise.all(Array.from({ length: 8 }, () => connectRaw(host.socketPath)));
+    const refused = await connectRaw(host.socketPath);
+    await refused.closed;
+    await Promise.all(timedOut.map((client) => client.closed));
+
+    const wrongProof = await connectRaw(host.socketPath);
+    const { clientNonce, serverNonce } = await hello(wrongProof);
+    wrongProof.send({ type: 'auth', proof: proof(randomHex(), 'client', clientNonce, serverNonce) });
+    const garbage = await connectRaw(host.socketPath);
+    garbage.socket.write('not json\n');
+    const oversized = await connectRaw(host.socketPath);
+    oversized.socket.write('a'.repeat(5 * 1024));
+    const authenticated = await connectClient(host.socketPath);
+    authenticated.socket.end();
+    await Promise.all([wrongProof, garbage, oversized, authenticated].map((client) => client.closed));
+    // The host frees a slot in its close handler, which runs after the client already sees the
+    // close. A full handshake needs later event loop turns on the host, so once it completes every
+    // earlier close has been handled. Authenticated connections hold no slot.
+    await connectClient(host.socketPath);
+
+    const silent = await Promise.all(Array.from({ length: 12 }, () => connectRaw(host.socketPath)));
+    // A Unix socket connect completes once the kernel queues it, before the host accepts it. The host
+    // accepts in queue order and the cap is full after the silent ones, so once the probe is refused
+    // every silent connection has been accepted or refused.
+    const probe = await connectRaw(host.socketPath);
+    await waitFor(() => expect(probe.isClosed()).toBe(true), 1_000);
+    await waitFor(() => expect(silent.filter((client) => client.isClosed())).toHaveLength(4), 1_000);
+    expect(silent.filter((client) => !client.isClosed())).toHaveLength(8);
+    for (const client of [...silent, probe]) expect(client.lines).toEqual([]);
+  }, 10_000);
 });
 
 // Named pipes and %LOCALAPPDATA% only exist on Windows; these run in CI on windows-latest.

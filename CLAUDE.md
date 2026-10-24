@@ -39,7 +39,7 @@ The native host is a local program installed on the user's machine, not a hosted
   - Limits before `ready`: 2 s from connect, at most 8 unauthenticated connections on the host, 4 KiB per line on the host; after `ready`, 64 MB per line.
 - Tests: Vitest, run with `npm test` from `src/`. Every feature ships with its own automated tests.
 - TDD where it fits: logic with a spec known up front (protocols, framing, multiplexing, parsing, accessibility tree and `ref_N` resolution, argument validation, translating `computer` actions to WebDriver BiDi) gets its tests written first, reviewed, then the implementation. Code whose correctness depends on real Firefox behavior (native messaging lifecycle, event page suspension, `captureVisibleTab`, permissions, BiDi) is written first and covered afterwards, together with a check in a real Firefox.
-- Windows support is required. `feature/windows-support` delivers the authenticated bridge above and, as its next part, the installer: registry-based native host registration and a `.cmd` wrapper.
+- Windows support is required. `feature/windows-support` delivers the authenticated bridge above and the Windows installer. The installer creates `%LOCALAPPDATA%\claude-firefox-extension\`, hardens it with `icacls` (inheritance removed, full control for the current user's SID, SYSTEM and Administrators only) while it is still empty, then writes `native-host.bat` (CRLF; `@echo off`, `setlocal DisableDelayedExpansion`, `chcp 65001`, then the quoted Node binary and host entry with `--native-host %*`) and `claude_firefox_extension.json`, both UTF-8, and registers the manifest last as the default value of `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` with `reg.exe /reg:64`. If writing or registration fails, files that existed before the run get their previous content back (an older registry entry may still point at them) and new ones are removed. Uninstall deletes the key first and keeps the files if `reg.exe` fails or cannot run. `whoami.exe`, `icacls.exe` and `reg.exe` are run by their absolute `%SystemRoot%\System32` path without a shell. Accepted edge cases, to be probed by the Windows manual check: with delayed expansion enabled globally in the registry, cmd mangles a `!` in the `.bat` path (that is, in the Windows profile path) before the wrapper runs; an install path that contains `&`, `^` or `|` but no space may be passed unquoted by Firefox.
 
 ## Threat model
 
@@ -47,7 +47,7 @@ The native host is a local program installed on the user's machine, not a hosted
 - Trusted: any process running as the same OS user (it can read `bridge.json` and drive the browser); Administrators, SYSTEM and root. Same as other local browser-automation bridges.
 - Known risk (accepted): on Windows, pipe names are enumerable by any user, so another local user can keep all unauthenticated connection slots busy. Denial of service only; nothing can be read or forged. Whether named pipes reject remote clients is still to be verified on Windows.
 - Before distribution: the extension id `claude-firefox-extension@localhost` is not reserved; another add-on with the same id signed on addons.mozilla.org could reach the native host if installed. Fixed by `feature/amo-signing`.
-- Next major risk: prompt injection from page content once page-reading and JavaScript tools exist. Addressed by `feature/permissions` (per-site approval, confirmation of sensitive actions), which must land before `feature/accessibility-tree` and `feature/devtools-tools`.
+- Next major risk: prompt injection from page content once page-reading and JavaScript tools exist. Addressed by `feature/permissions` (per-site approval, confirmation of sensitive actions, optional agent container so the agent is not signed in to the user's accounts), which must land before `feature/accessibility-tree` and `feature/devtools-tools`.
 
 ## Roadmap
 
@@ -57,11 +57,11 @@ Each feature is its own branch from `main`. The feature's last commit marks it `
 - [x] `feature/extension-skeleton`: Firefox MV3 `manifest.json` and background script; the extension loads without errors.
 - [x] `feature/native-bridge`: native host + MCP server, end-to-end on the first tool `tabs_context`; install/registration of the native messaging manifest.
 - [x] `feature/tests`: Vitest setup and `npm test`; tests for the existing host (native messaging framing, JSON lines, client multiplexing, timeouts, socket directory checks, MCP server against a fake extension) and the extension tool registry / `tabs_context` with a mocked `browser.*`.
-- [ ] `feature/windows-support`: named pipe restricted to the current user, installer writing `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` and a `.cmd` wrapper, Windows paths in host and scripts.
+- [ ] `feature/windows-support`: named pipe with a random name per host start plus the authenticated bridge handshake, installer writing `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` and a `.bat` wrapper, Windows paths in host and scripts.
 - [ ] `feature/amo-signing`: reserve a real extension id on AMO, sign with `web-ext sign` (unlisted), permanent install in release Firefox, verify `runtime.onStartup` reconnect. Needs the user's AMO account and API keys; timing decided separately.
 - [ ] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
 - [ ] `feature/screenshot`: screenshots via `tabs.captureVisibleTab`.
-- [ ] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); design after researching how Claude in Chrome does it.
+- [ ] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); user choice between a dedicated agent container (`contextualIdentities`, isolated cookies and logins) and the normal profile, with default, switch location and per-domain mixing decided at the start; design after researching how Claude in Chrome does it.
 - [ ] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
 - [ ] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
 - [ ] `feature/devtools-tools`: `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`.
@@ -80,7 +80,8 @@ src/                   npm package root; every command is run from here
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
   vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), scripts
   scripts/build.mjs    esbuild bundling of extension/ into dist/extension and host/ into dist/host
-  scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS)
+  scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
+  scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows (self-contained)
   scripts/test/        installer tests (run a copy of the installer against a temp HOME)
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
@@ -116,6 +117,6 @@ Run every command from `src/` (`cd src && npm run build`).
 - `npm test`: run the Vitest suite once (no build, Firefox or network needed; temp dirs under `/tmp`, never the real bridge socket directory or `~/.mozilla`). `npm run test:watch` runs it in watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).
 - `npm run start`: run the built extension in a temporary Firefox profile with `web-ext run` (build first).
-- `npm run install-host`: register the native messaging host for Firefox (build first): writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary (`~/.local/share/claude-firefox-extension/native-host` on Linux, `~/Library/Application Support/claude-firefox-extension/native-host` on macOS) and the manifest `claude_firefox_extension.json` (`~/.mozilla/native-messaging-hosts/` on Linux, `~/Library/Application Support/Mozilla/NativeMessagingHosts/` on macOS). Prints the `claude mcp add` command. Windows, Snap and Flatpak Firefox are not supported.
-- `npm run uninstall-host`: remove the manifest and the wrapper.
-- `claude mcp add firefox -- '<node>' '<abs path>/src/dist/host/index.js' --mcp`: register the MCP server with Claude Code, once, using the exact command printed by `npm run install-host`.
+- `npm run install-host`: register the native messaging host for Firefox (build first): writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary (`~/.local/share/claude-firefox-extension/native-host` on Linux, `~/Library/Application Support/claude-firefox-extension/native-host` on macOS) and the manifest `claude_firefox_extension.json` (`~/.mozilla/native-messaging-hosts/` on Linux, `~/Library/Application Support/Mozilla/NativeMessagingHosts/` on macOS). On Windows it writes `native-host.bat` and `claude_firefox_extension.json` into `%LOCALAPPDATA%\claude-firefox-extension\` (restricted with `icacls` to the current user, SYSTEM and Administrators) and registers the manifest under `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension`. Prints the `claude mcp add` command. Snap and Flatpak Firefox are not supported.
+- `npm run uninstall-host`: remove the manifest and the wrapper; on Windows also the registry key (the directory is kept while it still holds `bridge.json`).
+- `claude mcp add firefox -- '<node>' '<abs path>/src/dist/host/index.js' --mcp` (double quotes on Windows): register the MCP server with Claude Code, once, using the exact command printed by `npm run install-host`.

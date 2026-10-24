@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, rm, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { execFileRunner, installWindows, uninstallWindows, windowsInstallPaths, windowsMcpAddHint } from './install-host-lib.mjs';
 
 const APP_NAME = 'claude-firefox-extension';
 // Must match NATIVE_HOST_NAME in host/protocol.ts and the extension's runtime.connectNative() call.
@@ -12,8 +13,34 @@ const root = join(import.meta.dirname, '..');
 const hostEntry = join(root, 'dist/host/index.js');
 const uninstall = process.argv.includes('--uninstall');
 
+if (process.platform === 'win32') {
+  const paths = windowsInstallPaths(process.env, homedir());
+  try {
+    if (uninstall) {
+      await uninstallWindows({ paths, env: process.env, run: execFileRunner });
+      console.log('Removed the native messaging host:');
+      console.log(`  registry: HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`);
+      console.log(`  ${paths.manifestPath}`);
+      console.log(`  ${paths.wrapperPath}`);
+    } else {
+      await installWindows({ paths, env: process.env, nodePath: process.execPath, hostEntry, run: execFileRunner });
+      console.log('Installed the native messaging host:');
+      console.log(`  registry: HKCU\\Software\\Mozilla\\NativeMessagingHosts\\${NATIVE_HOST_NAME}`);
+      console.log(`  manifest: ${paths.manifestPath}`);
+      console.log(`  wrapper:  ${paths.wrapperPath}`);
+      console.log('');
+      console.log('Register the MCP server with Claude Code:');
+      console.log(`  ${windowsMcpAddHint(process.execPath, hostEntry)}`);
+    }
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  process.exit(0);
+}
+
 if (process.platform !== 'linux' && process.platform !== 'darwin') {
-  console.error(`Native host installation is not supported on ${process.platform} yet (Linux and macOS only).`);
+  console.error(`Native host installation is not supported on ${process.platform}.`);
   process.exit(1);
 }
 
