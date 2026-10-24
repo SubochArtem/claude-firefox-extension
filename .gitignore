@@ -1,0 +1,10 @@
+node_modules/
+dist/
+web-ext-artifacts/
+*.xpi
+*.zip
+*.log
+
+.claude/
+.mcp.json
+CLAUDE.local.md
