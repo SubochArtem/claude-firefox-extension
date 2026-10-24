@@ -168,6 +168,21 @@ export function parseWhoamiUserCsv(output) {
 }
 
 /**
+ * Firefox starts the host with `cmd.exe /s/c "<bat> <manifest> <id>"` and quotes the .bat path only when it
+ * contains a space, so cmd splits an unquoted path at `&` and treats `^` as an escape.
+ * @param {string} dir
+ * @returns {string[]}
+ */
+export function windowsPathWarnings(dir) {
+  if (!/[&^]/.test(dir) || dir.includes(' ')) return [];
+  return [
+    `Warning: the install directory ${dir} contains '&' or '^' and no space. Firefox passes the path of ` +
+      'native-host.bat to cmd.exe unquoted in that case, so Firefox will not be able to start the native host ' +
+      'from this directory and the extension will not connect.',
+  ];
+}
+
+/**
  * @param {string} nodePath
  * @param {string} hostEntry
  */
@@ -247,9 +262,15 @@ export async function installWindows({ paths, env, nodePath, hostEntry, run, hos
 }
 
 /**
- * @param {{ paths: WindowsInstallPaths, env: Env, run: Runner, hostName?: string }} options
+ * @param {{
+ *   paths: WindowsInstallPaths,
+ *   env: Env,
+ *   run: Runner,
+ *   hostName?: string,
+ *   removeDir?: (path: string) => Promise<void>,
+ * }} options
  */
-export async function uninstallWindows({ paths, env, run, hostName = NATIVE_HOST_NAME }) {
+export async function uninstallWindows({ paths, env, run, hostName = NATIVE_HOST_NAME, removeDir = rmdir }) {
   const reg = windowsToolPath(env, 'reg.exe');
   try {
     await run(reg, regDeleteArgs(hostName));
@@ -269,9 +290,10 @@ export async function uninstallWindows({ paths, env, run, hostName = NATIVE_HOST
   await rm(paths.manifestPath, { force: true });
   await rm(paths.wrapperPath, { force: true });
   try {
-    await rmdir(paths.dir);
+    await removeDir(paths.dir);
   } catch (error) {
     const code = /** @type {NodeJS.ErrnoException} */ (error).code;
-    if (code !== 'ENOENT' && code !== 'ENOTEMPTY') throw error;
+    // EBUSY: a running host holds the directory open (and keeps bridge.json in it).
+    if (code !== 'ENOENT' && code !== 'ENOTEMPTY' && code !== 'EBUSY') throw error;
   }
 }

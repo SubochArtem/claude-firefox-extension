@@ -18,6 +18,7 @@ import {
   textResult,
   waitFor,
   type BridgeClient,
+  type FakeExtension,
 } from './helpers';
 
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -28,6 +29,13 @@ async function hello(client: BridgeClient): Promise<{ clientNonce: string; serve
   client.send({ type: 'hello', nonce: clientNonce });
   const line = await client.nextLine();
   return { clientNonce, serverNonce: String(line['nonce']), hostProof: line['proof'] };
+}
+
+// 'exit' can fire before the last stdout bytes have been read from the pipe.
+async function stdoutEnded(host: FakeExtension): Promise<void> {
+  await waitFor(() => {
+    if (!host.child.stdout.readableEnded) throw new Error('the native host stdout is still open');
+  });
 }
 
 describe.skipIf(process.platform === 'win32')('native host process', () => {
@@ -244,6 +252,66 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
     const client = await connectClient(first.socketPath);
     client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await client.nextLine()).toEqual(textResult('1', 'first'));
+  });
+
+  // A pong from a host that is about to exit makes the extension believe it connected, so the second
+  // host must decide to step aside before it handles anything the extension sent.
+  it('writes nothing to stdout when it exits because another host is listening, even for a ping sent at spawn', async () => {
+    const runtimeDir = await tempDir();
+    const first = await startHost(runtimeDir);
+    const info = readBridgeJson(first.bridgeInfoPath);
+    const second = await startHost(runtimeDir, { waitUntilListening: false });
+    second.send({ type: 'ping' });
+    expect(await second.exited).toBe(1);
+    await stdoutEnded(second);
+    expect(second.stdoutBytes()).toBe(0);
+    expect(readBridgeJson(first.bridgeInfoPath)).toEqual(info);
+
+    first.send({ type: 'ping' });
+    await waitFor(() => expect(first.received).toEqual([{ type: 'pong' }]));
+    first.respondWith((request) => textResult(request['id'], 'first'));
+    const client = await connectClient(first.socketPath);
+    client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
+    expect(await client.nextLine()).toEqual(textResult('1', 'first'));
+  });
+
+  it('answers a ping sent at spawn exactly once, after it has written bridge.json', async () => {
+    const host = await startHost(await tempDir(), { waitUntilListening: false });
+    const bridgeInfoAtFirstByte: boolean[] = [];
+    host.child.stdout.once('data', () => bridgeInfoAtFirstByte.push(existsSync(host.bridgeInfoPath)));
+    host.send({ type: 'ping' });
+    await waitFor(() => expect(host.received).toEqual([{ type: 'pong' }]));
+    expect(bridgeInfoAtFirstByte).toEqual([true]);
+    await host.waitForStderr(/listening on/);
+    await sleep(100);
+    expect(host.received).toEqual([{ type: 'pong' }]);
+  });
+
+  it('handles every message sent at spawn in order once it has written bridge.json', async () => {
+    const host = await startHost(await tempDir(), { waitUntilListening: false });
+    const bridgeInfoAtData: boolean[] = [];
+    host.child.stdout.on('data', () => bridgeInfoAtData.push(existsSync(host.bridgeInfoPath)));
+    host.send({ type: 'ping' });
+    host.send(textResult('9:9', 'nobody asked'));
+    host.send({ type: 'ping' });
+    await waitFor(() => expect(host.received).toEqual([{ type: 'pong' }, { type: 'pong' }]));
+    expect(bridgeInfoAtData.length).toBeGreaterThan(0);
+    expect(bridgeInfoAtData.every(Boolean)).toBe(true);
+    await host.waitForStderr(/listening on/);
+    await sleep(100);
+    expect(host.received).toEqual([{ type: 'pong' }, { type: 'pong' }]);
+    expect(host.child.exitCode).toBeNull();
+    expect(host.stderr()).toMatch(/response for unknown request 9:9/);
+  });
+
+  it('writes nothing to stdout when stdin closes right after a ping sent at spawn', async () => {
+    const host = await startHost(await tempDir(), { waitUntilListening: false });
+    host.send({ type: 'ping' });
+    host.child.stdin.end();
+    expect(await host.exited).toBe(0);
+    await stdoutEnded(host);
+    expect(host.stdoutBytes()).toBe(0);
+    expect(existsSync(host.bridgeInfoPath)).toBe(false);
   });
 
   it('takes over a stale socket left by a killed host', async () => {
@@ -576,6 +644,52 @@ describe.runIf(process.platform === 'win32')('native host on Windows', () => {
     const client = await connectClient(info.endpoint, info.secret);
     client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await client.nextLine()).toEqual(textResult('1', 'first'));
+  });
+
+  it('writes nothing to stdout when it exits because an authenticated host is running, even for a ping sent at spawn', async () => {
+    const localAppData = await windowsTempDir();
+    const infoPath = join(localAppData, APP_DIR, 'bridge.json');
+    const first = await startWindowsHost(localAppData);
+    const info = readBridgeJson(infoPath);
+
+    const second = await startHost(localAppData, { waitUntilListening: false, env: childEnv({ LOCALAPPDATA: localAppData }) });
+    second.send({ type: 'ping' });
+    expect(await second.exited).toBe(1);
+    await stdoutEnded(second);
+    expect(second.stdoutBytes()).toBe(0);
+    expect(readBridgeJson(infoPath)).toEqual(info);
+
+    first.send({ type: 'ping' });
+    await waitFor(() => expect(first.received).toEqual([{ type: 'pong' }]));
+  });
+
+  it('handles every message sent at spawn in order once it has written bridge.json', async () => {
+    const localAppData = await windowsTempDir();
+    const infoPath = join(localAppData, APP_DIR, 'bridge.json');
+    const host = await startHost(localAppData, { waitUntilListening: false, env: childEnv({ LOCALAPPDATA: localAppData }) });
+    const bridgeInfoAtData: boolean[] = [];
+    host.child.stdout.on('data', () => bridgeInfoAtData.push(existsSync(infoPath)));
+    host.send({ type: 'ping' });
+    host.send(textResult('9:9', 'nobody asked'));
+    host.send({ type: 'ping' });
+    await waitFor(() => expect(host.received).toEqual([{ type: 'pong' }, { type: 'pong' }]));
+    expect(bridgeInfoAtData.length).toBeGreaterThan(0);
+    expect(bridgeInfoAtData.every(Boolean)).toBe(true);
+    await host.waitForStderr(/listening on/);
+    await sleep(100);
+    expect(host.received).toEqual([{ type: 'pong' }, { type: 'pong' }]);
+    expect(host.child.exitCode).toBeNull();
+  });
+
+  it('writes nothing to stdout when stdin closes right after a ping sent at spawn', async () => {
+    const localAppData = await windowsTempDir();
+    const host = await startHost(localAppData, { waitUntilListening: false, env: childEnv({ LOCALAPPDATA: localAppData }) });
+    host.send({ type: 'ping' });
+    host.child.stdin.end();
+    expect(await host.exited).toBe(0);
+    await stdoutEnded(host);
+    expect(host.stdoutBytes()).toBe(0);
+    expect(existsSync(join(localAppData, APP_DIR, 'bridge.json'))).toBe(false);
   });
 
   it('replaces a bridge.json whose endpoint has no authenticated host', async () => {

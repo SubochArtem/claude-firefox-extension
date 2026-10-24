@@ -2,7 +2,14 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, rm, rmdir, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { execFileRunner, installWindows, uninstallWindows, windowsInstallPaths, windowsMcpAddHint } from './install-host-lib.mjs';
+import {
+  execFileRunner,
+  installWindows,
+  uninstallWindows,
+  windowsInstallPaths,
+  windowsMcpAddHint,
+  windowsPathWarnings,
+} from './install-host-lib.mjs';
 
 const APP_NAME = 'claude-firefox-extension';
 // Must match NATIVE_HOST_NAME in host/protocol.ts and the extension's runtime.connectNative() call.
@@ -31,6 +38,7 @@ if (process.platform === 'win32') {
       console.log('');
       console.log('Register the MCP server with Claude Code:');
       console.log(`  ${windowsMcpAddHint(process.execPath, hostEntry)}`);
+      for (const warning of windowsPathWarnings(paths.dir)) console.error(`\n${warning}`);
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

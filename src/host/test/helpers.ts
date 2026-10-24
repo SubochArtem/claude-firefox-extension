@@ -118,6 +118,7 @@ export interface FakeExtension extends ChildHandle {
   socketPath: string;
   bridgeInfoPath: string;
   received: unknown[];
+  stdoutBytes: () => number;
   send: (message: unknown) => void;
   sendRaw: (bytes: Buffer) => void;
   nextRequest: () => Promise<Record<string, unknown>>;
@@ -138,11 +139,13 @@ export async function startHost(
   let consumed = 0;
   let handler: ((request: Record<string, unknown>) => unknown) | undefined;
   let buffered = Buffer.alloc(0);
+  let stdoutBytes = 0;
   child.stdin.on('error', () => {});
   const send = (message: unknown): void => {
     child.stdin.write(encodeNativeMessage(message));
   };
   child.stdout.on('data', (chunk: Buffer) => {
+    stdoutBytes += chunk.length;
     buffered = Buffer.concat([buffered, chunk]);
     while (buffered.length >= 4) {
       const length = nativeLength(buffered);
@@ -161,6 +164,7 @@ export async function startHost(
     socketPath: socketPathIn(runtimeDir),
     bridgeInfoPath: bridgeInfoPathIn(runtimeDir),
     received,
+    stdoutBytes: () => stdoutBytes,
     send,
     sendRaw: (bytes) => child.stdin.write(bytes),
     nextRequest: () =>

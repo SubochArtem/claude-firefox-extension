@@ -67,6 +67,10 @@ const pending = new Map<string, PendingRequest>();
 const unauthenticated = new Set<Socket>();
 let nextClientId = 1;
 let shuttingDown = false;
+// The extension takes a pong as a working connection, so a host that is about to step aside for
+// another one must not answer anything: messages wait here until this host has decided to serve.
+let serving = false;
+const earlyExtensionMessages: unknown[] = [];
 // Undefined until this process has bound the socket path and recorded what it created there.
 let socketIdentity: SocketIdentity | undefined;
 // Undefined until this process has bound its endpoint and generated the secret for bridge.json.
@@ -106,7 +110,7 @@ async function isOtherHostRunning(): Promise<boolean> {
 }
 
 function sendToExtension(message: HostToExtensionMessage): boolean {
-  if (shuttingDown) return false;
+  if (shuttingDown || !serving) return false;
   return writeNativeMessage(process.stdout, message);
 }
 
@@ -225,6 +229,20 @@ function handleExtensionMessage(message: unknown): void {
   respond(entry.client, { ...parsed, id: entry.originalId });
 }
 
+function receiveExtensionMessage(message: unknown): void {
+  if (shuttingDown) return;
+  if (serving) handleExtensionMessage(message);
+  else earlyExtensionMessages.push(message);
+}
+
+function startServing(): void {
+  serving = true;
+  for (const message of earlyExtensionMessages.splice(0)) {
+    if (shuttingDown) return;
+    handleExtensionMessage(message);
+  }
+}
+
 function ownsEndpoint(server: Server, socketPath: string | undefined): boolean {
   // Windows pipes vanish with their owner, so only Unix socket files need the identity check.
   if (isWindows) return server.listening;
@@ -265,7 +283,7 @@ export async function runNativeHost(): Promise<void> {
     if (socketPath && socketIdentity && isOwnSocket(socketPath, socketIdentity)) rmSync(socketPath, { force: true });
   });
   // Firefox closes stdin when the extension's port disconnects; that is the host's signal to exit.
-  readNativeMessages(process.stdin, handleExtensionMessage);
+  readNativeMessages(process.stdin, receiveExtensionMessage);
   process.stdin.on('end', () => shutdown(server, socketPath, 'stdin closed'));
   process.stdin.on('error', (error) => shutdown(server, socketPath, `stdin error: ${error.message}`));
   process.stdout.on('error', (error) => shutdown(server, socketPath, `stdout error: ${error.message}`));
@@ -334,4 +352,5 @@ export async function runNativeHost(): Promise<void> {
     return;
   }
   console.error(`${LOG} listening on ${endpoint}`);
+  startServing();
 }

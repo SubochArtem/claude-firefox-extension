@@ -21,6 +21,7 @@ import {
   uninstallWindows,
   windowsInstallPaths,
   windowsMcpAddHint,
+  windowsPathWarnings,
   windowsToolPath,
 } from '../install-host-lib.mjs';
 
@@ -248,6 +249,28 @@ describe('windowsMcpAddHint', () => {
     expect(windowsMcpAddHint(NODE, 'C:\\Users\\Анна\\my pkg\\src\\dist\\host\\index.js')).toBe(
       `claude mcp add firefox -- "${NODE}" "C:\\Users\\Анна\\my pkg\\src\\dist\\host\\index.js" --mcp`,
     );
+  });
+});
+
+// Firefox runs `cmd.exe /s/c "<bat> <manifest> <id>"` and quotes the .bat path only when it contains a space.
+describe('windowsPathWarnings', () => {
+  it.each(['C:\\Users\\a&b\\AppData\\Local\\claude-firefox-extension', 'C:\\Users\\a^b\\AppData\\Local\\claude-firefox-extension'])(
+    'warns that Firefox cannot start the host from %s',
+    (dir) => {
+      const warnings = windowsPathWarnings(dir);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(dir);
+      expect(warnings[0]).toMatch(/Firefox will not be able to start the native host/);
+    },
+  );
+
+  it.each([
+    'C:\\Users\\a b & c\\AppData\\Local\\claude-firefox-extension',
+    'C:\\Users\\a b ^ c\\AppData\\Local\\claude-firefox-extension',
+    'C:\\Users\\anna\\AppData\\Local\\claude-firefox-extension',
+    'C:\\Users\\Анна (old)\\AppData\\Local\\claude-firefox-extension',
+  ])('does not warn about %s', (dir) => {
+    expect(windowsPathWarnings(dir)).toEqual([]);
   });
 });
 
@@ -557,6 +580,42 @@ describe('Windows uninstall flow', () => {
     expect(existsSync(paths.wrapperPath)).toBe(false);
     expect(existsSync(paths.manifestPath)).toBe(false);
     expect(existsSync(bridgeInfo)).toBe(true);
+  });
+
+  // Windows refuses to remove a directory that a running process holds an open handle to with EBUSY,
+  // before checking whether it is empty.
+  it('keeps a directory that a running host holds open and still succeeds', async () => {
+    const bridgeInfo = join(paths.dir, 'bridge.json');
+    await writeFile(bridgeInfo, '{}');
+    const removed: string[] = [];
+    const removeDir = async (path: string) => {
+      removed.push(path);
+      throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${path}'`), { code: 'EBUSY', syscall: 'rmdir', path });
+    };
+    await expect(uninstallWindows({ paths, env: ENV, run: fakeRunner().run, removeDir })).resolves.toBeUndefined();
+    expect(removed).toEqual([paths.dir]);
+    expect(existsSync(paths.wrapperPath)).toBe(false);
+    expect(existsSync(paths.manifestPath)).toBe(false);
+    expect(existsSync(bridgeInfo)).toBe(true);
+  });
+
+  // EPERM means access was denied, not that the directory is in use, so it is still reported.
+  it('fails when the directory cannot be removed for lack of permission', async () => {
+    const removeDir = async (path: string) => {
+      throw Object.assign(new Error(`EPERM: operation not permitted, rmdir '${path}'`), { code: 'EPERM', syscall: 'rmdir', path });
+    };
+    await expect(uninstallWindows({ paths, env: ENV, run: fakeRunner().run, removeDir })).rejects.toThrow(/EPERM/);
+  });
+
+  it('removes the directory with the given function', async () => {
+    const removed: string[] = [];
+    const removeDir = async (path: string) => {
+      removed.push(path);
+      await rm(path, { recursive: true });
+    };
+    await uninstallWindows({ paths, env: ENV, run: fakeRunner().run, removeDir });
+    expect(removed).toEqual([paths.dir]);
+    expect(existsSync(paths.dir)).toBe(false);
   });
 
   it('succeeds when nothing is installed', async () => {
