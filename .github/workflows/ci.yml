@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          # The floor of engines.node (">=24"). A range here would resolve against whatever Node
+          # versions the runner image has cached, so the tested version would drift between images.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
