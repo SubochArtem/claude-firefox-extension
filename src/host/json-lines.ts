@@ -7,13 +7,15 @@ export interface JsonLinesOptions {
   // Read again for every check, so a connection can raise its limit once the peer is trusted.
   maxLineBytes?: () => number;
   onInvalidJson?: () => void;
+  // Runs right before an oversized line closes the connection.
+  onOverflow?: () => void;
 }
 
 export function readJsonLines(
   socket: Socket,
   onMessage: (message: unknown) => void,
   logPrefix: string,
-  { maxLineBytes = () => MAX_LINE_BYTES, onInvalidJson }: JsonLinesOptions = {},
+  { maxLineBytes = () => MAX_LINE_BYTES, onInvalidJson, onOverflow }: JsonLinesOptions = {},
 ): void {
   // Raw bytes, not decoded strings: '\n' never occurs inside a multi-byte UTF-8 sequence, so only
   // the new chunk has to be scanned, and parts are joined once per line.
@@ -24,7 +26,7 @@ export function readJsonLines(
     let newline = chunk.indexOf(NEWLINE);
     while (newline !== -1) {
       if (partsBytes + newline - start > maxLineBytes()) {
-        overflow(socket, logPrefix, maxLineBytes());
+        overflow(socket, logPrefix, maxLineBytes(), onOverflow);
         return;
       }
       parts.push(chunk.subarray(start, newline));
@@ -49,13 +51,14 @@ export function readJsonLines(
     if (start < chunk.length) {
       parts.push(chunk.subarray(start));
       partsBytes += chunk.length - start;
-      if (partsBytes > maxLineBytes()) overflow(socket, logPrefix, maxLineBytes());
+      if (partsBytes > maxLineBytes()) overflow(socket, logPrefix, maxLineBytes(), onOverflow);
     }
   });
 }
 
-function overflow(socket: Socket, logPrefix: string, limit: number): void {
+function overflow(socket: Socket, logPrefix: string, limit: number, onOverflow?: () => void): void {
   console.error(`${logPrefix} JSON line exceeds ${limit} bytes, closing the connection`);
+  onOverflow?.();
   socket.destroy();
 }
 

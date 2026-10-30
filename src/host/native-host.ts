@@ -155,9 +155,17 @@ function handleConnection(socket: Socket): void {
   const id = nextClientId++;
   let nonces: { client: string; server: string } | undefined;
   let client: Client | undefined;
+  // Called before the host closes an unauthenticated connection itself, not only on 'close': that
+  // event runs after the peer can already see the close, and a peer reconnecting at once would be
+  // refused for a slot still counted.
+  const releaseSlot = (): void => {
+    clearTimeout(timer);
+    unauthenticated.delete(socket);
+  };
   const reject = (reason: string): void => {
     if (socket.destroyed) return;
     console.error(`${LOG} connection ${id} failed the handshake: ${reason}`);
+    releaseSlot();
     socket.destroy();
   };
   unauthenticated.add(socket);
@@ -174,8 +182,7 @@ function handleConnection(socket: Socket): void {
     const auth = parseAuth(message);
     if (!auth) return reject('expected auth');
     if (!verifyProof(clientProof(info.secret, nonces.client, nonces.server), auth.proof)) return reject('wrong proof');
-    clearTimeout(timer);
-    unauthenticated.delete(socket);
+    releaseSlot();
     client = { id, socket, pendingIds: new Set() };
     clients.set(id, client);
     writeJsonLine(socket, { type: 'ready' });
@@ -193,12 +200,14 @@ function handleConnection(socket: Socket): void {
       onInvalidJson: () => {
         if (!client) reject('invalid JSON');
       },
+      onOverflow: () => {
+        if (!client) releaseSlot();
+      },
     },
   );
   socket.on('error', (error) => console.error(`${LOG} client ${id} socket error:`, error.message));
   socket.on('close', () => {
-    clearTimeout(timer);
-    unauthenticated.delete(socket);
+    releaseSlot();
     if (!client) return;
     for (const pendingId of client.pendingIds) {
       clearTimeout(pending.get(pendingId)?.timer);

@@ -608,9 +608,9 @@ describe('native host handshake', () => {
       const open = Object.entries(closing).filter(([, client]) => !client.isClosed()).map(([name]) => name);
       throw new Error(`${(error as Error).message}; still open: ${open.join(', ')}`);
     });
-    // The host frees a slot in its close handler, which runs after the client already sees the
-    // close. A full handshake needs later event loop turns on the host, so once it completes every
-    // earlier close has been handled. Authenticated connections hold no slot.
+    // The host frees the slot of a connection it rejects before closing it, and of one the client
+    // closes only in its close handler. A full handshake needs later event loop turns on the host, so
+    // once it completes every earlier close has been handled. Authenticated connections hold no slot.
     await within(connectClient(host), 1_000, 'authenticate after the closes');
 
     const silent = await within(Promise.all(Array.from({ length: 13 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 13 silent clients');

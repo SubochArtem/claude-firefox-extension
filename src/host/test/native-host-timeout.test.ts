@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
-import { Server } from 'node:net';
+import { createServer, Server, type Socket } from 'node:net';
 import { PassThrough } from 'node:stream';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   bridgeInfoPathIn,
   bridgeTargetIn,
@@ -11,6 +11,7 @@ import {
   endpointExists,
   endpointIn,
   nativeLength,
+  newEndpoint,
   randomHex,
   RUNTIME_DIR_VAR,
   sleep,
@@ -227,6 +228,59 @@ describe('native host handshake timeout', () => {
       });
       host.stdin.write(encodeNativeMessage(textResult(request['id'], 'still open')));
       expect(await client.nextLine()).toEqual(textResult('late', 'still open'));
+    } finally {
+      await host.stop();
+    }
+  });
+});
+
+describe('native host handshake slots', () => {
+  const OVERSIZED = Buffer.from('a'.repeat(5 * 1024));
+  // Each case makes the host close all 8 idle connections synchronously.
+  it.each<[string, (hostSockets: Socket[]) => void]>([
+    ['the handshake timeout', () => vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS)],
+    ['invalid JSON', (hostSockets) => hostSockets.forEach((socket) => socket.emit('data', Buffer.from('not json\n')))],
+    ['the pre-ready line cap', (hostSockets) => hostSockets.forEach((socket) => socket.emit('data', OVERSIZED))],
+  ])('frees the slots of connections it closes on %s before their close events run', async (_label, closeIdle) => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const listen = Server.prototype.listen;
+    let hostServer: Server | undefined;
+    vi.spyOn(Server.prototype, 'listen').mockImplementation(function (this: Server, ...args: unknown[]) {
+      hostServer = this;
+      return (listen as (...listenArgs: unknown[]) => Server).apply(this, args);
+    } as typeof Server.prototype.listen);
+    const runtimeDir = await tempDir();
+    const host = await startInProcessHost(runtimeDir);
+    vi.mocked(Server.prototype.listen).mockRestore();
+    if (!hostServer) throw new Error('the host server was not captured');
+    const hostSockets: Socket[] = [];
+    hostServer.on('connection', (socket: Socket) => hostSockets.push(socket));
+    // A connection accepted by a separate server, handed to the host's server below at a moment no
+    // real accept can be timed to: after the host has destroyed the idle sockets, before their
+    // asynchronous 'close' events have run.
+    const spareServer = createServer();
+    onTestFinished(() => {
+      spareServer.close();
+    });
+    const spareEndpoint = newEndpoint(runtimeDir, 'spare');
+    await new Promise<void>((resolve) => spareServer.listen(spareEndpoint, resolve));
+    const accepted = new Promise<Socket>((resolve) => spareServer.once('connection', resolve));
+    try {
+      const idle = await Promise.all(Array.from({ length: 8 }, () => connectRaw(endpointIn(runtimeDir))));
+      await waitFor(() => expect(hostSockets).toHaveLength(8));
+      const spare = await connectRaw(spareEndpoint);
+      const spareOnHost = await accepted;
+
+      closeIdle(hostSockets.slice());
+      expect(hostSockets.every((socket) => socket.destroyed)).toBe(true);
+      hostServer.emit('connection', spareOnHost);
+
+      await Promise.all(idle.map((client) => client.closed));
+      spare.send({ type: 'hello', nonce: randomHex() });
+      await sleep(50);
+      expect(spare.isClosed()).toBe(false);
+      expect(await spare.nextLine()).toMatchObject({ type: 'hello' });
     } finally {
       await host.stop();
     }
