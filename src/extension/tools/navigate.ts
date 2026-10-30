@@ -1,10 +1,13 @@
+import { siteForUrl } from '../permissions/site';
+import { landedSite, requireSiteAccess } from '../permissions/site-access';
 import type { ContentBlock } from '../protocol';
 import { type NavigateTarget, parseNavigateArgs } from './navigation-input';
 import { tabsContextText } from './tabs-context';
 import { ToolError } from './tool-error';
 
 export const NAVIGATION_START_TIMEOUT_MS = 2_000;
-// Below the host's 30 s tool request timeout, so the agent gets this tool's own answer.
+// With a permission prompt before it, still below the host's tool request timeout (TOOL_REQUEST_TIMEOUT_MS
+// in host/protocol.ts), so the agent gets this tool's own answer.
 export const NAVIGATION_TIMEOUT_MS = 20_000;
 
 // Firefox reports the cancelled load of the previous document with this error right after a new
@@ -224,9 +227,17 @@ export class NavigationError extends ToolError {
   }
 }
 
+export function unapprovedText(tabId: number, host: string | undefined): string {
+  if (host === undefined) {
+    return `Tab ${tabId} landed on a page outside site permissions (not http or https). Its title and content are withheld.`;
+  }
+  return `Tab ${tabId} landed on an unapproved host: ${host}. Its title and content are withheld; the next action on this tab will ask the user for permission.`;
+}
+
 export interface NavigationTexts {
   headline: (url: string) => string;
   download: (url: string, stayUrl: string | undefined) => string;
+  unapproved: (host: string | undefined) => string;
 }
 
 async function currentTab(tabId: number): Promise<browser.tabs.Tab> {
@@ -237,21 +248,39 @@ async function currentTab(tabId: number): Promise<browser.tabs.Tab> {
   }
 }
 
-async function report(tabId: number, headline: string, note?: string): Promise<ContentBlock[]> {
+// A redirect may end on a site the user never approved, so its title and url are withheld.
+async function report(
+  tabId: number,
+  texts: NavigationTexts,
+  approvedHost: string | undefined,
+  headline: string,
+  note?: string,
+): Promise<ContentBlock[]> {
   const tab = await currentTab(tabId);
+  const landed = await landedSite(tab.url, approvedHost);
+  if (!landed.allowed) return [{ type: 'text', text: texts.unapproved(landed.host) }];
   const lines = [headline];
   if (tab.title) lines.push(`Title: ${tab.title}`);
   if (note) lines.push(note);
-  return [{ type: 'text', text: `${lines.join('\n')}\n\nTabs context: ${await tabsContextText()}` }];
+  return [{ type: 'text', text: `${lines.join('\n')}\n\nTabs context: ${await tabsContextText(approvedHost)}` }];
+}
+
+// A download reached through history, and the page a tab stays on after it, may be on a host the user never
+// approved; only the origin is shown then.
+async function shownUrl(url: string | undefined, approvedHost: string | undefined): Promise<string | undefined> {
+  if (url === undefined || !siteForUrl(url).ok) return url;
+  const landed = await landedSite(url, approvedHost);
+  return landed.allowed ? url : `${new URL(url).origin} (unapproved host)`;
 }
 
 // Starts the navigation in an existing tab and turns its outcome into the tool result; every expected
-// failure is thrown as a NavigationError.
+// failure is thrown as a NavigationError. approvedHost is the host the user allowed for this call.
 export async function navigateTab(
   tabId: number,
   target: NavigateTarget,
   initialTab: browser.tabs.Tab,
   texts: NavigationTexts,
+  approvedHost?: string,
 ): Promise<ContentBlock[]> {
   let outcome: NavigationOutcome;
   try {
@@ -263,16 +292,19 @@ export async function navigateTab(
   switch (outcome.status) {
     case 'loaded':
     case 'same-document':
-      return report(tabId, texts.headline(outcome.url));
+      return report(tabId, texts, approvedHost, texts.headline(outcome.url));
     case 'still-loading':
       return report(
         tabId,
+        texts,
+        approvedHost,
         texts.headline(outcome.url),
         `The page was still loading after ${NAVIGATION_TIMEOUT_MS / 1000} s; its content may be incomplete.`,
       );
     case 'download': {
       const tab = await browser.tabs.get(tabId).catch(() => initialTab);
-      return [{ type: 'text', text: texts.download(outcome.url, tab.url) }];
+      const downloadUrl = (await shownUrl(outcome.url, approvedHost)) ?? outcome.url;
+      return [{ type: 'text', text: texts.download(downloadUrl, await shownUrl(tab.url, approvedHost)) }];
     }
     case 'error':
       throw new NavigationError(describeNavigationError(outcome.error), outcome.url);
@@ -288,7 +320,7 @@ export async function navigateTab(
       const tab = await currentTab(tabId);
       if (target.kind === 'url') {
         // Firefox starts nothing when the tab already shows exactly this url, fragment included.
-        if (tab.url === target.url) return report(tabId, `Tab ${tabId} is already on ${target.url}`);
+        if (tab.url === target.url) return report(tabId, texts, approvedHost, `Tab ${tabId} is already on ${target.url}`);
         throw new NavigationError(
           `the navigation to ${target.url} did not start within ${NAVIGATION_START_TIMEOUT_MS / 1000} s`,
         );
@@ -306,9 +338,26 @@ export async function navigate(args: Record<string, unknown>): Promise<ContentBl
   const initialTab = await browser.tabs.get(tabId).catch(() => undefined);
   if (!initialTab) throw new ToolError(`Failed to navigate: tab ${tabId} does not exist`);
 
+  const approvedHost =
+    target.kind === 'url'
+      ? await requireSiteAccess({
+          url: target.url,
+          tool: 'navigate',
+          action: 'navigate',
+          subject: `Failed to navigate to ${target.url}`,
+        })
+      : undefined;
+
   const prefix = HISTORY_PREFIX[target.kind];
-  return navigateTab(tabId, target, initialTab, {
-    headline: (url) => `${prefix} ${url}`,
-    download: (url, stayUrl) => `${url} started a download instead of opening a page; tab ${tabId} stays on ${stayUrl}`,
-  });
+  return navigateTab(
+    tabId,
+    target,
+    initialTab,
+    {
+      headline: (url) => `${prefix} ${url}`,
+      download: (url, stayUrl) => `${url} started a download instead of opening a page; tab ${tabId} stays on ${stayUrl}`,
+      unapproved: (host) => unapprovedText(tabId, host),
+    },
+    approvedHost,
+  );
 }

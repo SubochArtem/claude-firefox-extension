@@ -1,4 +1,8 @@
 import { vi } from 'vitest';
+import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
+
+export const EXTENSION_ID = 'claude-firefox-extension@localhost';
+export const EXTENSION_ORIGIN = 'moz-extension://00000000-0000-4000-8000-000000000000';
 
 export interface FakePort {
   port: browser.runtime.Port;
@@ -123,6 +127,17 @@ export function mockBrowser() {
     getLastFocused: vi.fn<() => Promise<Partial<browser.windows.Window>>>(async () => {
       throw new Error('No window');
     }),
+    getAll: vi.fn<(getInfo?: browser.windows._GetAllGetInfo) => Promise<Partial<browser.windows.Window>[]>>(async () => []),
+    create: vi.fn<(createData: browser.windows._CreateCreateData) => Promise<Partial<browser.windows.Window>>>(async () => {
+      throw new Error('windows.create is not mocked');
+    }),
+    remove: vi.fn<(windowId: number) => Promise<void>>(async () => {}),
+    onRemoved: createEvent<[windowId: number]>(),
+  };
+  const runtime = {
+    id: EXTENSION_ID,
+    connectNative,
+    getURL: vi.fn((path: string) => `${EXTENSION_ORIGIN}/${path}`),
   };
   const scripting = {
     executeScript: vi.fn<
@@ -149,8 +164,29 @@ export function mockBrowser() {
       }),
     },
   };
-  const events = [tabs.onRemoved, ...Object.values(webNavigation)];
+  const events = [tabs.onRemoved, windows.onRemoved, ...Object.values(webNavigation)];
   const listenerCount = () => events.reduce((sum, event) => sum + event.listenerCount(), 0);
-  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation, windows, scripting, permissions, storage });
-  return { ports, connectNative, alarms, query, tabs, webNavigation, windows, scripting, permissions, storage, listenerCount };
+  // Stores an allow-always record per host, so tools act without a permission prompt.
+  const allowSites = (...hosts: string[]) => {
+    storageData.set(
+      PERMISSION_STORAGE_KEY,
+      hosts.map((host) => ({ id: `allow-${host}`, host, wildcard: false, decision: 'allow', duration: 'always', createdAt: 0 })),
+    );
+  };
+  vi.stubGlobal('browser', { runtime, alarms, tabs, webNavigation, windows, scripting, permissions, storage });
+  return {
+    ports,
+    connectNative,
+    runtime,
+    alarms,
+    query,
+    tabs,
+    webNavigation,
+    windows,
+    scripting,
+    permissions,
+    storage,
+    listenerCount,
+    allowSites,
+  };
 }

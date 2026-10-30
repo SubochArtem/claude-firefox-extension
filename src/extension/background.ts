@@ -1,4 +1,5 @@
 import { connect, RECONNECT_ALARM } from './native-bridge';
+import { handlePromptMessage } from './permissions/popup-prompt';
 
 browser.runtime.onInstalled.addListener((details) => {
   const { version } = browser.runtime.getManifest();
@@ -13,5 +14,7 @@ browser.runtime.onStartup.addListener(connect);
 browser.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === RECONNECT_ALARM) connect();
 });
+
+browser.runtime.onMessage.addListener(handlePromptMessage);
 
 connect();

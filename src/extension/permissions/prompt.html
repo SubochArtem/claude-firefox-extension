@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Claude Firefox Extension: site permission</title>
+    <style>
+      body {
+        font: 14px/1.4 system-ui, sans-serif;
+        margin: 0;
+        padding: 20px;
+        color: #15141a;
+        background: #f9f9fb;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 12px;
+      }
+      .host {
+        font-family: ui-monospace, monospace;
+        font-size: 16px;
+        font-weight: 600;
+        word-break: break-all;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 4px 12px;
+        margin: 12px 0;
+      }
+      dt {
+        color: #5b5b66;
+      }
+      dd {
+        margin: 0;
+      }
+      label {
+        display: block;
+        margin: 12px 0;
+      }
+      .buttons {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+      button {
+        font: inherit;
+        padding: 8px;
+      }
+      [hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Claude wants to access a site</h1>
+    <section id="request" hidden>
+      <div class="host" id="host"></div>
+      <dl>
+        <dt>Action</dt>
+        <dd id="action"></dd>
+        <dt>Tool</dt>
+        <dd id="tool"></dd>
+      </dl>
+      <label id="subdomains-label" hidden><input type="checkbox" id="subdomains" /> Include subdomains</label>
+      <div class="buttons">
+        <button type="button" data-answer="allow_once">Allow once</button>
+        <button type="button" data-answer="allow_always">Always allow this site</button>
+        <button type="button" data-answer="deny">Deny</button>
+        <button type="button" data-answer="deny_always">Always deny this site</button>
+      </div>
+    </section>
+    <p id="status"></p>
+    <script src="prompt.js"></script>
+  </body>
+</html>

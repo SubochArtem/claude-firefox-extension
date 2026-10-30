@@ -1,6 +1,6 @@
 import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { createConnection } from 'node:net';
 import { tmpdir, userInfo } from 'node:os';
@@ -31,6 +31,9 @@ const FIREFOX_EXIT_TIMEOUT_MS = 30_000;
 const BRIDGE_REMOVAL_TIMEOUT_MS = 20_000;
 const OVERALL_TIMEOUT_MS = 12 * 60_000;
 const LOG_TAIL_LINES = 60;
+const SEED_SCRIPT = 'e2e-seed-permissions.js';
+const APPROVED_HOST = '127.0.0.1';
+const DENIED_HOST = 'localhost';
 
 const isWindows = process.platform === 'win32';
 const root = join(import.meta.dirname, '..');
@@ -59,6 +62,8 @@ let mcpClient;
 let pageServer;
 let mcpStderr = '';
 let installed = false;
+/** The copy of the built extension that Firefox loads, with seeded site permissions. */
+let seededExtensionDir = '';
 /** Set only for a local --force run: the temporary HOME and the environment passed to the MCP server. */
 /** @type {{ home: string, env: Record<string, string> } | undefined} */
 let localRun;
@@ -255,7 +260,7 @@ async function startFirefox(name, binary, extraEnv = {}) {
   try {
     runner = await webExt.cmd.run(
       {
-        sourceDir: extensionDir,
+        sourceDir: seededExtensionDir,
         target: ['firefox-desktop'],
         firefox: binary,
         firefoxProfile: profileDir,
@@ -292,6 +297,25 @@ async function startFirefox(name, binary, extraEnv = {}) {
   firefoxes.push(instance);
   log(`${name} Firefox started (pid ${firefox.pid})`);
   return instance;
+}
+
+// Nobody can answer a permission prompt in headless CI, so Firefox loads a copy of the built extension
+// whose first background script stores an always-allow record for the page server's host and an
+// always-deny record for another host. The seed exists only in this temporary copy; the built
+// extension has no way to grant permissions other than the user's answer to a prompt.
+async function prepareSeededExtension() {
+  const dir = await makeTempDir('cfe-e2e-extension-');
+  await cp(extensionDir, dir, { recursive: true });
+  const manifestPath = join(dir, 'manifest.json');
+  const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  manifest.background.scripts = [SEED_SCRIPT, ...manifest.background.scripts];
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  const records = [
+    { id: 'e2e-allow', host: APPROVED_HOST, wildcard: false, decision: 'allow', duration: 'always', createdAt: Date.now() },
+    { id: 'e2e-deny', host: DENIED_HOST, wildcard: false, decision: 'deny', duration: 'always', createdAt: Date.now() },
+  ];
+  await writeFile(join(dir, SEED_SCRIPT), `browser.storage.local.set({ permissionStorage: ${JSON.stringify(records)} });\n`);
+  return dir;
 }
 
 /** @param {ChildProcess} child */
@@ -549,6 +573,7 @@ async function main() {
       );
     }
     check(!existsSync(infoPath), `${infoPath} already exists; another native host seems to be running in this environment`);
+    seededExtensionDir = await prepareSeededExtension();
     return `Firefox ${version ?? '(unknown version)'} at ${firefoxBinary}; bridge.json expected at ${infoPath}`;
   });
 
@@ -609,6 +634,21 @@ async function main() {
     );
     const blank = await createAndCloseTab(client, {}, /^Created tab (\d+)\n/);
     return `tab ${loaded} with ${url}, blank tab ${blank}`;
+  });
+
+  await step('a site the user always denied is refused before any tab opens', async () => {
+    const client = mcpClient;
+    check(client !== undefined, 'no MCP client');
+    const before = await tabIds(client);
+    const url = `http://${DENIED_HOST}:1/page`;
+    const result = await client.callTool({ name: 'tabs_create', arguments: { url } });
+    const text = resultText(result);
+    check(
+      result.isError === true && text.startsWith(`Access to ${DENIED_HOST} is blocked by the user's site settings`),
+      `expected tabs_create to ${url} to be blocked, got: ${text}`,
+    );
+    const after = await tabIds(client);
+    check(after.length === before.length, `tabs_create opened a tab for a denied site: ${before} -> ${after}`);
   });
 
   await step('computer screenshot of a background tab through the MCP server', async () => {

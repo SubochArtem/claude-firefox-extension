@@ -28,6 +28,10 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('tabs_create', args)).toBeUndefined();
   });
 
+  it('maps tabs_close to navigate', () => {
+    expect(permissionActionForTool('tabs_close', { tabId: 1 })).toBe('navigate');
+  });
+
   it.each(['screenshot', 'zoom'])('maps the computer %s action to read_page_content', (action) => {
     expect(permissionActionForTool('computer', { action, tabId: 1 })).toBe('read_page_content');
   });
@@ -42,7 +46,6 @@ describe('permissionActionForTool', () => {
     ['computer', { action: 'click' }],
     ['computer', {}],
     ['tabs_context', {}],
-    ['tabs_close', { tabId: 1 }],
     ['unknown_tool', {}],
   ])('returns undefined for %s %o', (tool, args) => {
     expect(permissionActionForTool(tool, args)).toBeUndefined();

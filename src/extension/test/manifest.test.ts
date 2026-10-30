@@ -14,6 +14,10 @@ describe('manifest', () => {
     expect(manifest.permissions).toContain('scripting');
   });
 
+  it('declares the storage permission that site permission records need', () => {
+    expect(manifest.permissions).toContain('storage');
+  });
+
   it('requests access to all websites, which tabs.captureTab requires', () => {
     expect(manifest.host_permissions).toEqual(['<all_urls>']);
   });
