@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sleep, startFakeHost, tempDir, textResult, waitFor } from './helpers';
+import { RUNTIME_DIR_VAR, sleep, startFakeHost, tempDir, textResult, waitFor } from './helpers';
 
 const MCP_TIMEOUT_MS = 30_000;
 const HANDSHAKE_TIMEOUT_MS = 2_000;
@@ -31,7 +31,7 @@ async function startInProcessMcp(runtimeDir: string) {
       }
     }
   };
-  vi.stubEnv('XDG_RUNTIME_DIR', runtimeDir);
+  vi.stubEnv(RUNTIME_DIR_VAR, runtimeDir);
 
   const send = (message: unknown): void => {
     stdin.write(`${JSON.stringify(message)}\n`);
@@ -80,7 +80,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('MCP server request timeout', () => {
+describe('MCP server request timeout', () => {
   it('returns a timeout error after 30 s and ignores the late answer', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -120,7 +120,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('M
   });
 });
 
-describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('MCP server handshake timeout', () => {
+describe('MCP server handshake timeout', () => {
   it.each([
     ['never answers hello', 'silent', ['hello']],
     ['never sends ready', 'no-ready', ['hello', 'auth']],

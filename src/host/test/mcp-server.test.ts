@@ -12,10 +12,10 @@ import {
   childEnv,
   hostEntry,
   INJECTED_TEXT,
+  newEndpoint,
   randomHex,
   readBridgeJson,
   sleep,
-  socketPathIn,
   startFakeHost,
   startHost,
   tempDir,
@@ -29,12 +29,21 @@ const NOT_CONNECTED =
   'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
 const AUTH_FAILED = /^Authentication with the native host failed/;
 
-// StdioClientTransport always merges `env` into the SDK's reduced default environment (HOME, LOGNAME,
-// PATH, SHELL, TERM, USER), the same way Claude Code starts the server. Only XDG_RUNTIME_DIR is added,
-// to keep every test away from the user's real bridge socket directory; `env` replaces it.
+// The SDK's reduced default environment (HOME, LOGNAME, PATH, SHELL, TERM, USER; on Windows APPDATA,
+// LOCALAPPDATA, USERPROFILE and a few more), the way Claude Code starts the server, pointed at
+// runtimeDir to keep every test away from the user's real bridge: XDG_RUNTIME_DIR is added, or
+// LOCALAPPDATA replaced on Windows.
+function serverEnv(runtimeDir: string): Record<string, string> {
+  return process.platform === 'win32'
+    ? childEnv({ LOCALAPPDATA: runtimeDir }, getDefaultEnvironment())
+    : { ...getDefaultEnvironment(), XDG_RUNTIME_DIR: runtimeDir };
+}
+
+// StdioClientTransport always merges `env` into the SDK's default environment; `env` replaces
+// serverEnv(runtimeDir).
 async function startMcp(
   runtimeDir: string,
-  env: Record<string, string> = { XDG_RUNTIME_DIR: runtimeDir },
+  env: Record<string, string> = serverEnv(runtimeDir),
 ): Promise<{ client: Client; stderr: () => string }> {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -61,7 +70,7 @@ function errorText(result: Awaited<ReturnType<typeof callTabsContext>>): string 
   return (result.content as { text: string }[])[0]?.text ?? '';
 }
 
-describe.skipIf(process.platform === 'win32')('MCP server process', () => {
+describe('MCP server process', () => {
   it('lists tabs_context with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
@@ -85,22 +94,6 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
     mkdirSync(join(runtimeDir, APP_DIR), { mode: 0o700 });
     const { client } = await startMcp(runtimeDir);
     expect(await callTabsContext(client)).toEqual({ content: [{ type: 'text', text: NOT_CONNECTED }], isError: true });
-  });
-
-  it('returns a tool error when the socket directory is not private', async () => {
-    const runtimeDir = await tempDir();
-    const dir = join(runtimeDir, APP_DIR);
-    mkdirSync(dir);
-    chmodSync(dir, 0o755);
-    const { client } = await startMcp(runtimeDir);
-    const result = await callTabsContext(client);
-    expect(result.isError).toBe(true);
-    expect(result.content).toEqual([
-      {
-        type: 'text',
-        text: `Could not reach the native host: Refusing to use bridge socket directory ${dir}: its mode is 755, group and other must have no access`,
-      },
-    ]);
   });
 
   it('forwards a call through the native host to the extension and back with the SDK reduced environment', async () => {
@@ -173,12 +166,12 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
     });
   });
 
-  it('returns the not-connected error when bridge.json points at a socket nobody listens on', async () => {
+  it('returns the not-connected error when bridge.json points at an endpoint nobody listens on', async () => {
     const runtimeDir = await tempDir();
     mkdirSync(join(runtimeDir, APP_DIR), { mode: 0o700 });
     writeFileSync(
       bridgeInfoPathIn(runtimeDir),
-      JSON.stringify({ version: 1, endpoint: socketPathIn(runtimeDir), secret: randomHex(), pid: 999_999 }),
+      JSON.stringify({ version: 1, endpoint: newEndpoint(join(runtimeDir, APP_DIR), 'bridge'), secret: randomHex(), pid: 999_999 }),
       { mode: 0o600 },
     );
     const { client } = await startMcp(runtimeDir);
@@ -339,7 +332,7 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
     const host = connected ? await startHost(runtimeDir) : undefined;
     host?.respondWith((request) => textResult(request['id'], 'ok'));
     const mcp = track(
-      spawn(process.execPath, [hostEntry, '--mcp'], { env: { ...getDefaultEnvironment(), XDG_RUNTIME_DIR: runtimeDir } }),
+      spawn(process.execPath, [hostEntry, '--mcp'], { env: serverEnv(runtimeDir) }),
     );
     let stdout = '';
     mcp.child.stdout.setEncoding('utf8');
@@ -364,6 +357,25 @@ describe.skipIf(process.platform === 'win32')('MCP server process', () => {
     mcp.child.stdin.end();
     expect(await mcp.exited).toBe(0);
     expect(mcp.stderr()).toMatch(/exiting: stdin closed/);
+  });
+});
+
+// The socket directory checks only exist on Linux and macOS.
+describe.skipIf(process.platform === 'win32')('MCP server process on Unix sockets', () => {
+  it('returns a tool error when the socket directory is not private', async () => {
+    const runtimeDir = await tempDir();
+    const dir = join(runtimeDir, APP_DIR);
+    mkdirSync(dir);
+    chmodSync(dir, 0o755);
+    const { client } = await startMcp(runtimeDir);
+    const result = await callTabsContext(client);
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([
+      {
+        type: 'text',
+        text: `Could not reach the native host: Refusing to use bridge socket directory ${dir}: its mode is 755, group and other must have no access`,
+      },
+    ]);
   });
 });
 

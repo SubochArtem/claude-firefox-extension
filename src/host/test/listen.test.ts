@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:net';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { listenWithRetry } from '../listen';
-import { tempDir } from './helpers';
+import { newEndpoint, tempDir } from './helpers';
 
 function closeOnFinish(server: Server): Server {
   onTestFinished(
@@ -22,11 +22,11 @@ async function occupy(path: string): Promise<Server> {
 }
 
 // listenWithRetry is the seam for EADDRINUSE on a freshly generated endpoint (a random Windows pipe
-// name that happens to be taken). Unix socket paths stand in for pipe names here.
-describe.skipIf(process.platform === 'win32')('listenWithRetry', () => {
+// name that happens to be taken). Unix socket paths stand in for pipe names on Linux and macOS.
+describe('listenWithRetry', () => {
   it('binds the first endpoint when it is free', async () => {
     const dir = await tempDir();
-    const free = join(dir, 'free.sock');
+    const free = newEndpoint(dir, 'free');
     const server = closeOnFinish(createServer());
     const nextEndpoint = vi.fn(() => free);
     await expect(listenWithRetry(server, nextEndpoint)).resolves.toBe(free);
@@ -37,8 +37,8 @@ describe.skipIf(process.platform === 'win32')('listenWithRetry', () => {
 
   it('asks for a new endpoint after EADDRINUSE and resolves with the one it bound', async () => {
     const dir = await tempDir();
-    const taken = join(dir, 'taken.sock');
-    const free = join(dir, 'free.sock');
+    const taken = newEndpoint(dir, 'taken');
+    const free = newEndpoint(dir, 'free');
     const occupant = await occupy(taken);
     const server = closeOnFinish(createServer());
     const errorListeners = server.listenerCount('error');
@@ -54,7 +54,7 @@ describe.skipIf(process.platform === 'win32')('listenWithRetry', () => {
 
   it('rejects with EADDRINUSE after three collisions by default', async () => {
     const dir = await tempDir();
-    const taken = join(dir, 'taken.sock');
+    const taken = newEndpoint(dir, 'taken');
     await occupy(taken);
     const server = closeOnFinish(createServer());
     const nextEndpoint = vi.fn(() => taken);
@@ -65,8 +65,8 @@ describe.skipIf(process.platform === 'win32')('listenWithRetry', () => {
 
   it('honours a custom number of attempts', async () => {
     const dir = await tempDir();
-    const taken = join(dir, 'taken.sock');
-    const free = join(dir, 'free.sock');
+    const taken = newEndpoint(dir, 'taken');
+    const free = newEndpoint(dir, 'free');
     await occupy(taken);
 
     const once = vi.fn<() => string>().mockReturnValueOnce(taken).mockReturnValueOnce(free);
@@ -79,7 +79,10 @@ describe.skipIf(process.platform === 'win32')('listenWithRetry', () => {
     await expect(listenWithRetry(closeOnFinish(createServer()), five, 5)).resolves.toBe(free);
     expect(five).toHaveBeenCalledTimes(5);
   });
+});
 
+// A pipe name has no parent directory that could be missing.
+describe.skipIf(process.platform === 'win32')('listenWithRetry on Unix sockets', () => {
   it('rejects at once without retrying on an error other than EADDRINUSE', async () => {
     const dir = await tempDir();
     const server = closeOnFinish(createServer());

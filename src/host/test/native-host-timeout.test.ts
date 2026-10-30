@@ -4,13 +4,16 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   bridgeInfoPathIn,
+  bridgeTargetIn,
   connectClient,
   connectRaw,
   encodeNativeMessage,
+  endpointExists,
+  endpointIn,
   nativeLength,
   randomHex,
+  RUNTIME_DIR_VAR,
   sleep,
-  socketPathIn,
   tempDir,
   textResult,
   waitFor,
@@ -44,7 +47,7 @@ async function startInProcessHost(runtimeDir: string) {
       }
     }
   };
-  vi.stubEnv('XDG_RUNTIME_DIR', runtimeDir);
+  vi.stubEnv(RUNTIME_DIR_VAR, runtimeDir);
 
   try {
     vi.resetModules();
@@ -70,14 +73,15 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('native host request timeout', () => {
+describe('native host request timeout', () => {
   it('answers with an error after 35 s without a response and ignores the late answer', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const runtimeDir = await tempDir();
     const host = await startInProcessHost(runtimeDir);
+    const endpoint = endpointIn(runtimeDir);
     try {
-      const client = await connectClient(socketPathIn(runtimeDir));
+      const client = await connectClient(bridgeTargetIn(runtimeDir));
       client.send({ type: 'tool_request', id: 'slow', tool: 'tabs_context', args: {} });
       const request = await waitFor(() => {
         const frame = host.frames.find((message) => message['type'] === 'tool_request');
@@ -103,7 +107,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
     } finally {
       await host.stop();
     }
-    expect(existsSync(socketPathIn(runtimeDir))).toBe(false);
+    expect(await endpointExists(endpoint)).toBe(false);
     expect(existsSync(bridgeInfoPathIn(runtimeDir))).toBe(false);
   });
 
@@ -113,7 +117,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
     const runtimeDir = await tempDir();
     const host = await startInProcessHost(runtimeDir);
     try {
-      const client = await connectClient(socketPathIn(runtimeDir));
+      const client = await connectClient(bridgeTargetIn(runtimeDir));
       client.send({ type: 'tool_request', id: 'fast', tool: 'tabs_context', args: {} });
       const request = await waitFor(() => {
         const frame = host.frames.find((message) => message['type'] === 'tool_request');
@@ -132,15 +136,17 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
   });
 });
 
-describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('native host startup', () => {
+describe('native host startup', () => {
   it('closes the server when stdin fails between the bind and recording the socket identity', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     // Faked so the 1 s grace timer cannot be what ends the host.
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const listen = Server.prototype.listen;
+    let endpoint: unknown;
     // The stream error is queued with process.nextTick right after the 'listening' event, so
     // shutdown runs before the await in runNativeHost resumes.
     vi.spyOn(Server.prototype, 'listen').mockImplementation(function (this: Server, ...args: unknown[]) {
+      endpoint = args[0];
       const server = (listen as (...listenArgs: unknown[]) => Server).apply(this, args);
       process.stdin.destroy(new Error('boom'));
       return server;
@@ -149,7 +155,8 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
     const host = await startInProcessHost(runtimeDir);
     try {
       await waitFor(() => expect(process.exit).toHaveBeenCalledWith(0));
-      expect(existsSync(socketPathIn(runtimeDir))).toBe(false);
+      expect(typeof endpoint).toBe('string');
+      expect(await endpointExists(endpoint as string)).toBe(false);
       expect(existsSync(bridgeInfoPathIn(runtimeDir))).toBe(false);
       expect(console.error).toHaveBeenCalledWith('[native-host] shutting down: stdin error: boom');
       expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining('listening on'));
@@ -159,7 +166,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
   });
 });
 
-describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('native host handshake timeout', () => {
+describe('native host handshake timeout', () => {
   it('closes a connection that sends nothing after exactly 2 s without writing to it', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
@@ -167,7 +174,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
     const host = await startInProcessHost(runtimeDir);
     try {
       const timersBefore = vi.getTimerCount();
-      const client = await connectRaw(socketPathIn(runtimeDir));
+      const client = await connectRaw(endpointIn(runtimeDir));
       // Only a sync point: the host has accepted the connection and started its handshake timer.
       await waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timersBefore));
       vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS - 1);
@@ -188,7 +195,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
     const host = await startInProcessHost(runtimeDir);
     try {
       const timersBefore = vi.getTimerCount();
-      const client = await connectRaw(socketPathIn(runtimeDir));
+      const client = await connectRaw(endpointIn(runtimeDir));
       // Only a sync point: the host has accepted the connection and started its handshake timer.
       await waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timersBefore));
       vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS / 2);
@@ -208,7 +215,7 @@ describe.runIf(process.platform === 'linux' || process.platform === 'darwin')('n
     const runtimeDir = await tempDir();
     const host = await startInProcessHost(runtimeDir);
     try {
-      const client = await connectClient(socketPathIn(runtimeDir));
+      const client = await connectClient(bridgeTargetIn(runtimeDir));
       vi.advanceTimersByTime(HANDSHAKE_TIMEOUT_MS * 5);
       await sleep(50);
       expect(client.isClosed()).toBe(false);

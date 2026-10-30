@@ -74,7 +74,9 @@ Each feature is its own branch from `main`. The feature's last commit marks it `
 ```
 CLAUDE.md
 .gitignore
-.github/workflows/ci.yml  GitHub Actions on Linux, Windows, macOS (Node 24): npm ci, typecheck, build, lint, test
+.github/workflows/ci.yml  GitHub Actions on Linux, Windows, macOS (Node 24): npm ci, typecheck, build, lint, test;
+                          then an e2e job per OS (needs test): installs the current Firefox release from Mozilla's
+                          official downloads into RUNNER_TEMP, prints its version, npm ci, build, npm run e2e with E2E_FIREFOX
 src/                   npm package root; every command is run from here
   package.json
   package-lock.json
@@ -85,6 +87,7 @@ src/                   npm package root; every command is run from here
   scripts/build.mjs    esbuild bundling of extension/ into dist/extension and host/ into dist/host
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows (self-contained)
+  scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e)
   scripts/test/        installer tests (run a copy of the installer against a temp HOME)
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
@@ -92,7 +95,8 @@ src/                   npm package root; every command is run from here
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included
     test/              unit tests, process tests against the bundled host, in-process timeout tests with fake timers;
-                       helpers.ts (temp dirs under /tmp, fake extension, bridge client), global-setup.ts
+                       helpers.ts (temp dirs under /tmp, endpoints as Unix sockets or Windows pipes from bridge.json,
+                       fake extension, bridge client), global-setup.ts
     index.ts           dispatches by flag: --native-host or --mcp
     protocol.ts        message types for both channels, shared constants
     socket-path.ts     bridge socket path resolution and permissions; random pipe names on Windows
@@ -122,4 +126,5 @@ Run every command from `src/` (`cd src && npm run build`).
 - `npm run start`: run the built extension in a temporary Firefox profile with `web-ext run` (build first).
 - `npm run install-host`: register the native messaging host for Firefox (build first): writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary (`~/.local/share/claude-firefox-extension/native-host` on Linux, `~/Library/Application Support/claude-firefox-extension/native-host` on macOS) and the manifest `claude_firefox_extension.json` (`~/.mozilla/native-messaging-hosts/` on Linux, `~/Library/Application Support/Mozilla/NativeMessagingHosts/` on macOS). On Windows it writes `native-host.bat` and `claude_firefox_extension.json` into `%LOCALAPPDATA%\claude-firefox-extension\` (restricted with `icacls` to the current user, SYSTEM and Administrators) and registers the manifest under `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension`. Prints the `claude mcp add` command. Snap and Flatpak Firefox are not supported.
 - `npm run uninstall-host`: remove the manifest and the wrapper; on Windows also the registry key (the directory is kept while it still holds `bridge.json` or a running host holds it open).
+- `npm run e2e`: end-to-end check against a real headless Firefox (build first). Installs the native host, loads the extension with the `web-ext` Node API in a temporary profile, waits for `bridge.json`, calls `tabs_context` through the MCP server (SDK default environment), checks that a tool request without the handshake is closed unanswered, runs a second Firefox for 40 s and requires 2 to 10 native host starts from it (counted by a `NODE_OPTIONS` preload) with `bridge.json` unchanged, stops the first Firefox and expects `bridge.json` removed and the not-connected error, then uninstalls. Prints a PASS/FAIL summary and exits non-zero on failure. It changes the native host registration of the environment it runs in, so it refuses to run unless `CI` is `true` or `1` or `--force` is passed (`npm run e2e -- --force`); for a local run on Linux point `HOME` and `XDG_RUNTIME_DIR` at temporary directories (`XDG_RUNTIME_DIR` is then passed to the MCP server explicitly). `E2E_FIREFOX` overrides the Firefox binary.
 - `claude mcp add firefox -- '<node>' '<abs path>/src/dist/host/index.js' --mcp` (double quotes on Windows): register the MCP server with Claude Code, once, using the exact command printed by `npm run install-host`.

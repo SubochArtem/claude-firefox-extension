@@ -1,7 +1,7 @@
 import type { Socket } from 'node:net';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { BridgeConnection } from '../mcp-server';
-import { startFakeHost, tempDir, textResult, waitFor, type FakeHost } from './helpers';
+import { RUNTIME_DIR_VAR, startFakeHost, tempDir, textResult, waitFor, type FakeHost } from './helpers';
 
 const NOT_CONNECTED =
   'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
@@ -33,7 +33,7 @@ async function connectedBridge(): Promise<{ bridge: BridgeConnection; host: Fake
   net.sockets = [];
   net.onCreate = undefined;
   const runtimeDir = await tempDir();
-  vi.stubEnv('XDG_RUNTIME_DIR', runtimeDir);
+  vi.stubEnv(RUNTIME_DIR_VAR, runtimeDir);
   const host = await startFakeHost(runtimeDir);
   host.respondWith((request) => textResult(request['id'], 'answer'));
   const bridge = new BridgeConnection();
@@ -76,7 +76,7 @@ async function expectNewConnectionSurvives(bridge: BridgeConnection, host: FakeH
   expect(net.sockets).toHaveLength(2);
 }
 
-describe.skipIf(process.platform === 'win32')('BridgeConnection', () => {
+describe('BridgeConnection', () => {
   it('reconnects instead of staying stuck when the socket is destroyed between ready and being cached', async () => {
     const { bridge, host } = await connectedBridge();
     let releaseClose: () => void = () => {};

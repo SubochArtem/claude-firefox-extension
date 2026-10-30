@@ -7,6 +7,7 @@ import {
   APP_DIR,
   childEnv,
   connectClient,
+  endpointExists,
   connectRaw,
   nativeHeader,
   proof,
@@ -38,28 +39,7 @@ async function stdoutEnded(host: FakeExtension): Promise<void> {
   });
 }
 
-describe.skipIf(process.platform === 'win32')('native host process', () => {
-  it('creates a private socket directory and a 0600 socket', async () => {
-    const runtimeDir = await tempDir();
-    const host = await startHost(runtimeDir);
-    expect(lstatSync(join(runtimeDir, APP_DIR)).mode & 0o777).toBe(0o700);
-    const socket = lstatSync(host.socketPath);
-    expect(socket.isSocket()).toBe(true);
-    expect(socket.mode & 0o777).toBe(0o600);
-  });
-
-  it('writes a 0600 bridge.json with its endpoint, pid and a fresh secret before reporting listening', async () => {
-    const runtimeDir = await tempDir();
-    const host = await startHost(runtimeDir);
-    expect(lstatSync(host.bridgeInfoPath).mode & 0o777).toBe(0o600);
-    expect(readBridgeJson(host.bridgeInfoPath)).toEqual({
-      version: 1,
-      endpoint: host.socketPath,
-      secret: expect.stringMatching(HEX64),
-      pid: host.child.pid,
-    });
-  });
-
+describe('native host process', () => {
   it('uses a new secret at every start', async () => {
     const runtimeDir = await tempDir();
     const first = await startHost(runtimeDir);
@@ -78,7 +58,7 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
 
   it('forwards requests with per-client ids and routes responses back to the right client', async () => {
     const host = await startHost(await tempDir());
-    const [a, b] = await Promise.all([connectClient(host.socketPath), connectClient(host.socketPath)]);
+    const [a, b] = await Promise.all([connectClient(host), connectClient(host)]);
     a.send({ type: 'tool_request', id: '1', tool: 'tabs_context', args: { from: 'a' } });
     const first = await host.nextRequest();
     b.send({ type: 'tool_request', id: '1', tool: 'tabs_context', args: { from: 'b' } });
@@ -104,7 +84,7 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
   it('serves several requests from one client concurrently', async () => {
     const host = await startHost(await tempDir());
     host.respondWith((request) => textResult(request['id'], `answer ${String(request['id'])}`));
-    const client = await connectClient(host.socketPath);
+    const client = await connectClient(host);
     for (const id of ['x', 'y', 'z']) client.send({ type: 'tool_request', id, tool: 't', args: {} });
     const lines = await Promise.all([client.nextLine(), client.nextLine(), client.nextLine()]);
     expect(lines.map((line) => line['id'])).toEqual(['x', 'y', 'z']);
@@ -115,7 +95,7 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
 
   it('rejects a duplicate request id while the first is pending', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectClient(host.socketPath);
+    const client = await connectClient(host);
     client.send({ type: 'tool_request', id: 'dup', tool: 't', args: {} });
     const forwarded = await host.nextRequest();
     client.send({ type: 'tool_request', id: 'dup', tool: 't', args: {} });
@@ -132,7 +112,7 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
   it('ignores garbage from clients and keeps their connection usable', async () => {
     const host = await startHost(await tempDir());
     host.respondWith((request) => textResult(request['id'], 'ok'));
-    const client = await connectClient(host.socketPath);
+    const client = await connectClient(host);
     client.socket.write('{not json\n');
     client.send({ type: 'something_else' });
     client.send({ type: 'tool_request', id: 5, tool: 't', args: {} });
@@ -158,7 +138,7 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
 
   it('refuses to forward a request larger than the 1 MB native message limit', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectClient(host.socketPath);
+    const client = await connectClient(host);
     client.send({ type: 'tool_request', id: 'big', tool: 'tabs_context', args: { blob: 'a'.repeat(1024 * 1024) } });
     expect(await client.nextLine()).toEqual({
       type: 'tool_response',
@@ -170,14 +150,14 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
 
   it('drops pending requests of a client that disconnects', async () => {
     const host = await startHost(await tempDir());
-    const gone = await connectClient(host.socketPath);
+    const gone = await connectClient(host);
     gone.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     const request = await host.nextRequest();
     gone.socket.destroy();
     await gone.closed;
 
     // A full round trip on a newer connection makes sure the host has handled the older close.
-    const other = await connectClient(host.socketPath);
+    const other = await connectClient(host);
     host.respondWith((next) => textResult(next['id'], 'still serving'));
     other.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await other.nextLine()).toEqual(textResult('1', 'still serving'));
@@ -187,9 +167,10 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
     expect(gone.lines).toEqual([]);
   });
 
-  it('exits 0 and removes its socket when stdin closes, failing pending requests', async () => {
+  it('exits 0 and removes its endpoint when stdin closes, failing pending requests', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectClient(host.socketPath);
+    const { endpoint } = host;
+    const client = await connectClient(host);
     client.send({ type: 'tool_request', id: 'p', tool: 't', args: {} });
     await host.nextRequest();
     host.child.stdin.end();
@@ -200,79 +181,19 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
     });
     await client.closed;
     expect(await host.exited).toBe(0);
-    expect(existsSync(host.socketPath)).toBe(false);
+    expect(await endpointExists(endpoint)).toBe(false);
     expect(existsSync(host.bridgeInfoPath)).toBe(false);
     expect(host.stderr()).toMatch(/shutting down: stdin closed/);
   });
 
-  it('exits 0 and removes its socket and bridge.json on SIGTERM', async () => {
-    const host = await startHost(await tempDir());
-    host.child.kill('SIGTERM');
-    expect(await host.exited).toBe(0);
-    expect(existsSync(host.socketPath)).toBe(false);
-    expect(existsSync(host.bridgeInfoPath)).toBe(false);
-  });
-
-  it('exits 0 and removes its socket on SIGTERM sent the moment it reports listening', async () => {
-    const host = await startHost(await tempDir(), { waitUntilListening: false });
-    let signalled = false;
-    host.child.stderr.on('data', () => {
-      if (signalled || !/listening on/.test(host.stderr())) return;
-      signalled = true;
-      host.child.kill('SIGTERM');
-    });
-    expect(await host.exited).toBe(0);
-    expect(host.child.signalCode).toBeNull();
-    expect(host.stderr()).toMatch(/shutting down: SIGTERM/);
-    expect(existsSync(host.socketPath)).toBe(false);
-    expect(existsSync(host.bridgeInfoPath)).toBe(false);
-  });
-
   it('shuts down when the extension declares a frame larger than 64 MB', async () => {
     const host = await startHost(await tempDir());
+    const { endpoint } = host;
     host.sendRaw(nativeHeader(64 * 1024 * 1024 + 1));
     expect(await host.exited).toBe(0);
-    expect(existsSync(host.socketPath)).toBe(false);
+    expect(await endpointExists(endpoint)).toBe(false);
     expect(existsSync(host.bridgeInfoPath)).toBe(false);
     expect(host.stderr()).toMatch(/shutting down: stdin error: native message too large/);
-  });
-
-  it('exits 1 when another host is already listening and leaves its socket alone', async () => {
-    const runtimeDir = await tempDir();
-    const first = await startHost(runtimeDir);
-    const before = lstatSync(first.socketPath).ino;
-    const info = readBridgeJson(first.bridgeInfoPath);
-    const second = await startHost(runtimeDir, { waitUntilListening: false });
-    expect(await second.exited).toBe(1);
-    expect(second.stderr()).toMatch(/another native host is already listening/);
-    expect(lstatSync(first.socketPath).ino).toBe(before);
-    expect(readBridgeJson(first.bridgeInfoPath)).toEqual(info);
-
-    first.respondWith((request) => textResult(request['id'], 'first'));
-    const client = await connectClient(first.socketPath);
-    client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
-    expect(await client.nextLine()).toEqual(textResult('1', 'first'));
-  });
-
-  // A pong from a host that is about to exit makes the extension believe it connected, so the second
-  // host must decide to step aside before it handles anything the extension sent.
-  it('writes nothing to stdout when it exits because another host is listening, even for a ping sent at spawn', async () => {
-    const runtimeDir = await tempDir();
-    const first = await startHost(runtimeDir);
-    const info = readBridgeJson(first.bridgeInfoPath);
-    const second = await startHost(runtimeDir, { waitUntilListening: false });
-    second.send({ type: 'ping' });
-    expect(await second.exited).toBe(1);
-    await stdoutEnded(second);
-    expect(second.stdoutBytes()).toBe(0);
-    expect(readBridgeJson(first.bridgeInfoPath)).toEqual(info);
-
-    first.send({ type: 'ping' });
-    await waitFor(() => expect(first.received).toEqual([{ type: 'pong' }]));
-    first.respondWith((request) => textResult(request['id'], 'first'));
-    const client = await connectClient(first.socketPath);
-    client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
-    expect(await client.nextLine()).toEqual(textResult('1', 'first'));
   });
 
   it('answers a ping sent at spawn exactly once, after it has written bridge.json', async () => {
@@ -314,6 +235,106 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
     expect(existsSync(host.bridgeInfoPath)).toBe(false);
   });
 
+  it('removes its own leftover bridge.json temp files on exit and keeps those of other processes', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startHost(runtimeDir);
+    const own = join(runtimeDir, APP_DIR, `bridge.json.${host.child.pid}.${randomHex(8)}.tmp`);
+    const other = join(runtimeDir, APP_DIR, `bridge.json.${process.pid}.${randomHex(8)}.tmp`);
+    writeFileSync(own, '{}');
+    writeFileSync(other, '{}');
+    host.child.stdin.end();
+    expect(await host.exited).toBe(0);
+    expect(existsSync(own)).toBe(false);
+    expect(existsSync(other)).toBe(true);
+  });
+});
+
+// Socket files, their permissions and the directory checks only exist on Linux and macOS; Windows
+// cannot deliver SIGTERM to a handler (kill() terminates the process), and its second-host check has
+// its own tests below.
+describe.skipIf(process.platform === 'win32')('native host process on Unix sockets', () => {
+  it('creates a private socket directory and a 0600 socket', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startHost(runtimeDir);
+    expect(lstatSync(join(runtimeDir, APP_DIR)).mode & 0o777).toBe(0o700);
+    const socket = lstatSync(host.socketPath);
+    expect(socket.isSocket()).toBe(true);
+    expect(socket.mode & 0o777).toBe(0o600);
+  });
+
+  it('writes a 0600 bridge.json with its endpoint, pid and a fresh secret before reporting listening', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startHost(runtimeDir);
+    expect(lstatSync(host.bridgeInfoPath).mode & 0o777).toBe(0o600);
+    expect(readBridgeJson(host.bridgeInfoPath)).toEqual({
+      version: 1,
+      endpoint: host.socketPath,
+      secret: expect.stringMatching(HEX64),
+      pid: host.child.pid,
+    });
+  });
+
+  it('exits 0 and removes its socket and bridge.json on SIGTERM', async () => {
+    const host = await startHost(await tempDir());
+    host.child.kill('SIGTERM');
+    expect(await host.exited).toBe(0);
+    expect(existsSync(host.socketPath)).toBe(false);
+    expect(existsSync(host.bridgeInfoPath)).toBe(false);
+  });
+
+  it('exits 0 and removes its socket on SIGTERM sent the moment it reports listening', async () => {
+    const host = await startHost(await tempDir(), { waitUntilListening: false });
+    let signalled = false;
+    host.child.stderr.on('data', () => {
+      if (signalled || !/listening on/.test(host.stderr())) return;
+      signalled = true;
+      host.child.kill('SIGTERM');
+    });
+    expect(await host.exited).toBe(0);
+    expect(host.child.signalCode).toBeNull();
+    expect(host.stderr()).toMatch(/shutting down: SIGTERM/);
+    expect(existsSync(host.socketPath)).toBe(false);
+    expect(existsSync(host.bridgeInfoPath)).toBe(false);
+  });
+
+  it('exits 1 when another host is already listening and leaves its socket alone', async () => {
+    const runtimeDir = await tempDir();
+    const first = await startHost(runtimeDir);
+    const before = lstatSync(first.socketPath).ino;
+    const info = readBridgeJson(first.bridgeInfoPath);
+    const second = await startHost(runtimeDir, { waitUntilListening: false });
+    expect(await second.exited).toBe(1);
+    expect(second.stderr()).toMatch(/another native host is already listening/);
+    expect(lstatSync(first.socketPath).ino).toBe(before);
+    expect(readBridgeJson(first.bridgeInfoPath)).toEqual(info);
+
+    first.respondWith((request) => textResult(request['id'], 'first'));
+    const client = await connectClient(first);
+    client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
+    expect(await client.nextLine()).toEqual(textResult('1', 'first'));
+  });
+
+  // A pong from a host that is about to exit makes the extension believe it connected, so the second
+  // host must decide to step aside before it handles anything the extension sent.
+  it('writes nothing to stdout when it exits because another host is listening, even for a ping sent at spawn', async () => {
+    const runtimeDir = await tempDir();
+    const first = await startHost(runtimeDir);
+    const info = readBridgeJson(first.bridgeInfoPath);
+    const second = await startHost(runtimeDir, { waitUntilListening: false });
+    second.send({ type: 'ping' });
+    expect(await second.exited).toBe(1);
+    await stdoutEnded(second);
+    expect(second.stdoutBytes()).toBe(0);
+    expect(readBridgeJson(first.bridgeInfoPath)).toEqual(info);
+
+    first.send({ type: 'ping' });
+    await waitFor(() => expect(first.received).toEqual([{ type: 'pong' }]));
+    first.respondWith((request) => textResult(request['id'], 'first'));
+    const client = await connectClient(first);
+    client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
+    expect(await client.nextLine()).toEqual(textResult('1', 'first'));
+  });
+
   it('takes over a stale socket left by a killed host', async () => {
     const runtimeDir = await tempDir();
     const crashed = await startHost(runtimeDir);
@@ -325,7 +346,7 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
     const host = await startHost(runtimeDir);
     expect(readBridgeJson(host.bridgeInfoPath).pid).toBe(host.child.pid);
     host.respondWith((request) => textResult(request['id'], 'new host'));
-    const client = await connectClient(host.socketPath);
+    const client = await connectClient(host);
     client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await client.nextLine()).toEqual(textResult('1', 'new host'));
   });
@@ -349,22 +370,9 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
     expect(readBridgeJson(newHost.bridgeInfoPath)).toEqual(newInfo);
 
     newHost.respondWith((request) => textResult(request['id'], 'newer'));
-    const client = await connectClient(newHost.socketPath);
+    const client = await connectClient(newHost);
     client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await client.nextLine()).toEqual(textResult('1', 'newer'));
-  });
-
-  it('removes its own leftover bridge.json temp files on exit and keeps those of other processes', async () => {
-    const runtimeDir = await tempDir();
-    const host = await startHost(runtimeDir);
-    const own = join(runtimeDir, APP_DIR, `bridge.json.${host.child.pid}.${randomHex(8)}.tmp`);
-    const other = join(runtimeDir, APP_DIR, `bridge.json.${process.pid}.${randomHex(8)}.tmp`);
-    writeFileSync(own, '{}');
-    writeFileSync(other, '{}');
-    host.child.stdin.end();
-    expect(await host.exited).toBe(0);
-    expect(existsSync(own)).toBe(false);
-    expect(existsSync(other)).toBe(true);
   });
 
   it('exits 1 without listening when the socket directory is not private', async () => {
@@ -379,11 +387,11 @@ describe.skipIf(process.platform === 'win32')('native host process', () => {
   });
 });
 
-describe.skipIf(process.platform === 'win32')('native host handshake', () => {
+describe('native host handshake', () => {
   it('proves the secret, then authenticates the client and sends ready', async () => {
     const host = await startHost(await tempDir());
     const { secret } = readBridgeJson(host.bridgeInfoPath);
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     const { clientNonce, serverNonce, hostProof } = await hello(client);
     expect(client.lines[0]).toEqual({ type: 'hello', nonce: expect.stringMatching(HEX64), proof: expect.stringMatching(HEX64) });
     expect(serverNonce).not.toBe(clientNonce);
@@ -399,15 +407,15 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
 
   it('uses a different server nonce on every connection', async () => {
     const host = await startHost(await tempDir());
-    const a = await hello(await connectRaw(host.socketPath));
-    const b = await hello(await connectRaw(host.socketPath));
+    const a = await hello(await connectRaw(host.endpoint));
+    const b = await hello(await connectRaw(host.endpoint));
     expect(a.serverNonce).toMatch(HEX64);
     expect(a.serverNonce).not.toBe(b.serverNonce);
   });
 
   it('closes the connection on a wrong client proof without sending ready', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     const { clientNonce, serverNonce } = await hello(client);
     client.send({ type: 'auth', proof: proof(randomHex(), 'client', clientNonce, serverNonce) });
     await client.closed;
@@ -417,7 +425,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
 
   it('closes the connection when the client replays the host proof as its own', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     const { hostProof } = await hello(client);
     client.send({ type: 'auth', proof: hostProof });
     await client.closed;
@@ -432,7 +440,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
     ['an unknown message', { type: 'something_else' }],
   ])('closes the connection without writing anything when the first message is %s', async (_label, message) => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     client.send(message);
     await client.closed;
     expect(client.lines).toEqual([]);
@@ -441,7 +449,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
 
   it('closes the connection on a tool request between hello and auth', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     await hello(client);
     client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     await client.closed;
@@ -451,7 +459,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
 
   it('closes the connection on a second hello', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     await hello(client);
     client.send({ type: 'hello', nonce: randomHex() });
     await client.closed;
@@ -460,7 +468,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
 
   it('does not forward a tool request sent in the same write as a wrong auth', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     await hello(client);
     client.socket.write(
       `${JSON.stringify({ type: 'auth', proof: 'ab'.repeat(32) })}\n${JSON.stringify({ type: 'tool_request', id: '1', tool: 't', args: {} })}\n`,
@@ -474,8 +482,8 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
   it('keeps at most 8 unauthenticated connections, closes idle ones after 2 s without writing, then accepts again', async () => {
     const host = await startHost(await tempDir());
     const started = Date.now();
-    const idle = await Promise.all(Array.from({ length: 8 }, () => connectRaw(host.socketPath)));
-    const extra = await connectRaw(host.socketPath);
+    const idle = await Promise.all(Array.from({ length: 8 }, () => connectRaw(host.endpoint)));
+    const extra = await connectRaw(host.endpoint);
     await extra.closed;
     expect(extra.lines).toEqual([]);
     expect(idle.every((client) => !client.isClosed())).toBe(true);
@@ -485,7 +493,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
     for (const client of idle) expect(client.lines).toEqual([]);
 
     host.respondWith((request) => textResult(request['id'], 'slots freed'));
-    const client = await connectClient(host.socketPath);
+    const client = await connectClient(host);
     client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await client.nextLine()).toEqual(textResult('1', 'slots freed'));
   });
@@ -497,7 +505,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
     ['over several writes', [1024, 1024, 1024, 1024, 1024]],
   ])('closes a connection that sends more than 4 KiB without a newline before hello %s', async (_label, writes) => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     for (const bytes of writes) {
       if (client.isClosed()) break;
       client.socket.write('a'.repeat(bytes));
@@ -509,14 +517,14 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
     expect(host.received).toEqual([]);
 
     host.respondWith((request) => textResult(request['id'], 'still accepting'));
-    const other = await connectClient(host.socketPath);
+    const other = await connectClient(host);
     other.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await other.nextLine()).toEqual(textResult('1', 'still accepting'));
   });
 
   it('closes a connection that sends more than 4 KiB without a newline between hello and auth', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     await hello(client);
     client.socket.write('a'.repeat(5 * 1024));
     await waitFor(() => expect(client.isClosed()).toBe(true), 1_000);
@@ -526,7 +534,7 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
 
   it('accepts a hello line of exactly 4 KiB that arrives in two writes', async () => {
     const host = await startHost(await tempDir());
-    const client = await connectRaw(host.socketPath);
+    const client = await connectRaw(host.endpoint);
     const message = JSON.stringify({ type: 'hello', nonce: randomHex() });
     client.socket.write(`${' '.repeat(4 * 1024 - message.length)}${message}`);
     await sleep(50);
@@ -539,9 +547,9 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
     const host = await startHost(await tempDir());
     // One at a time: nine handshakes in flight together would exceed the limit themselves.
     const authenticated: BridgeClient[] = [];
-    for (let i = 0; i < 9; i++) authenticated.push(await connectClient(host.socketPath));
-    const idle = await Promise.all(Array.from({ length: 7 }, () => connectRaw(host.socketPath)));
-    const last = await connectClient(host.socketPath);
+    for (let i = 0; i < 9; i++) authenticated.push(await connectClient(host));
+    const idle = await Promise.all(Array.from({ length: 7 }, () => connectRaw(host.endpoint)));
+    const last = await connectClient(host);
     host.respondWith((request) => textResult(request['id'], 'ok'));
     last.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await last.nextLine()).toEqual(textResult('1', 'ok'));
@@ -551,31 +559,32 @@ describe.skipIf(process.platform === 'win32')('native host handshake', () => {
   it('frees exactly one slot per closed connection whatever closed it, so at most 8 stay unauthenticated afterwards', async () => {
     const host = await startHost(await tempDir());
     // Over the cap: eight closed by the handshake timeout, one destroyed on connect without a slot.
-    const timedOut = await Promise.all(Array.from({ length: 8 }, () => connectRaw(host.socketPath)));
-    const refused = await connectRaw(host.socketPath);
+    const timedOut = await Promise.all(Array.from({ length: 8 }, () => connectRaw(host.endpoint)));
+    const refused = await connectRaw(host.endpoint);
     await refused.closed;
     await Promise.all(timedOut.map((client) => client.closed));
 
-    const wrongProof = await connectRaw(host.socketPath);
+    const wrongProof = await connectRaw(host.endpoint);
     const { clientNonce, serverNonce } = await hello(wrongProof);
     wrongProof.send({ type: 'auth', proof: proof(randomHex(), 'client', clientNonce, serverNonce) });
-    const garbage = await connectRaw(host.socketPath);
+    const garbage = await connectRaw(host.endpoint);
     garbage.socket.write('not json\n');
-    const oversized = await connectRaw(host.socketPath);
+    const oversized = await connectRaw(host.endpoint);
     oversized.socket.write('a'.repeat(5 * 1024));
-    const authenticated = await connectClient(host.socketPath);
+    const authenticated = await connectClient(host);
     authenticated.socket.end();
     await Promise.all([wrongProof, garbage, oversized, authenticated].map((client) => client.closed));
     // The host frees a slot in its close handler, which runs after the client already sees the
     // close. A full handshake needs later event loop turns on the host, so once it completes every
     // earlier close has been handled. Authenticated connections hold no slot.
-    await connectClient(host.socketPath);
+    await connectClient(host);
 
-    const silent = await Promise.all(Array.from({ length: 12 }, () => connectRaw(host.socketPath)));
-    // A Unix socket connect completes once the kernel queues it, before the host accepts it. The host
-    // accepts in queue order and the cap is full after the silent ones, so once the probe is refused
-    // every silent connection has been accepted or refused.
-    const probe = await connectRaw(host.socketPath);
+    const silent = await Promise.all(Array.from({ length: 12 }, () => connectRaw(host.endpoint)));
+    // A connect completes once the kernel queues it (Unix socket) or a pipe instance takes it
+    // (Windows), before the host accepts it. The host accepts in that order and the cap is full after
+    // the silent ones, so once the probe is refused every silent connection has been accepted or
+    // refused.
+    const probe = await connectRaw(host.endpoint);
     await waitFor(() => expect(probe.isClosed()).toBe(true), 1_000);
     await waitFor(() => expect(silent.filter((client) => client.isClosed())).toHaveLength(4), 1_000);
     expect(silent.filter((client) => !client.isClosed())).toHaveLength(8);

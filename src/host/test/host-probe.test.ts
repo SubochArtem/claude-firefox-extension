@@ -8,8 +8,8 @@ import {
   bridgeInfoPathIn,
   connectClient,
   randomHex,
+  newEndpoint,
   readBridgeJson,
-  socketPathIn,
   startFakeHost,
   startHost,
   tempDir,
@@ -31,7 +31,7 @@ interface RawListener {
 // A listener that knows nothing about the handshake and plays `onConnection` on every client. Every
 // line the probe sends lands in `lines`.
 async function rawListener(onConnection: (socket: Socket) => void): Promise<RawListener> {
-  const endpoint = join(await tempDir(), 'raw.sock');
+  const endpoint = newEndpoint(await tempDir(), 'raw');
   const sockets: Socket[] = [];
   const lines: string[] = [];
   let closedConnections = 0;
@@ -75,7 +75,7 @@ async function probeTimed(info: BridgeInfo): Promise<{ alive: boolean; elapsed: 
   return { alive, elapsed: performance.now() - start };
 }
 
-describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive', () => {
+describe('isAuthenticatedHostAlive', () => {
   it('gives up after at most one second', () => {
     expect(HOST_PROBE_TIMEOUT_MS).toBeGreaterThan(0);
     expect(HOST_PROBE_TIMEOUT_MS).toBeLessThanOrEqual(1_000);
@@ -97,6 +97,7 @@ describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive', () => 
     const runtimeDir = await tempDir();
     const host = await startFakeHost(runtimeDir);
     const info = readBridgeJson(bridgeInfoPathIn(runtimeDir)) as BridgeInfo;
+    expect(info.endpoint).toBe(host.endpoint);
     expect(await isAuthenticatedHostAlive(info)).toBe(true);
     await waitForClose(host.closedConnections);
     expect(types(host.received)).toEqual(['hello', 'auth']);
@@ -106,7 +107,7 @@ describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive', () => 
   it('is false and sends no auth when the listener proves a different secret', async () => {
     const runtimeDir = await tempDir();
     const host = await startFakeHost(runtimeDir);
-    expect(await isAuthenticatedHostAlive(infoFor(socketPathIn(runtimeDir)))).toBe(false);
+    expect(await isAuthenticatedHostAlive(infoFor(host.endpoint))).toBe(false);
     await waitForClose(host.closedConnections);
     expect(types(host.received)).toEqual(['hello']);
   });
@@ -121,8 +122,7 @@ describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive', () => 
   ])('is false and sends no auth when the listener %s', async (_label, mode) => {
     const runtimeDir = await tempDir();
     const host = await startFakeHost(runtimeDir, mode);
-    const endpoint = socketPathIn(runtimeDir);
-    expect(await isAuthenticatedHostAlive(infoFor(endpoint, host.secret))).toBe(false);
+    expect(await isAuthenticatedHostAlive(infoFor(host.endpoint, host.secret))).toBe(false);
     await waitForClose(host.closedConnections);
     expect(types(host.received)).toEqual(['hello']);
   });
@@ -131,29 +131,22 @@ describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive', () => 
   it('is false when the listener sends a tool response instead of ready', async () => {
     const runtimeDir = await tempDir();
     const host = await startFakeHost(runtimeDir, 'response-instead-of-ready');
-    const endpoint = socketPathIn(runtimeDir);
-    expect(await isAuthenticatedHostAlive(infoFor(endpoint, host.secret))).toBe(false);
+    expect(await isAuthenticatedHostAlive(infoFor(host.endpoint, host.secret))).toBe(false);
     await waitForClose(host.closedConnections);
     expect(types(host.received)).toEqual(['hello', 'auth']);
     expect(host.requests).toEqual([]);
   });
 
   it('is false when nothing exists at the endpoint', async () => {
-    expect(await isAuthenticatedHostAlive(infoFor(join(await tempDir(), 'missing.sock')))).toBe(false);
+    expect(await isAuthenticatedHostAlive(infoFor(newEndpoint(await tempDir(), 'missing')))).toBe(false);
   });
 
-  it('is false for a stale socket left by a killed host', async () => {
+  it('is false for the endpoint of a killed host', async () => {
     const host = await startHost(await tempDir());
     const info = readBridgeJson(host.bridgeInfoPath) as BridgeInfo;
     host.child.kill('SIGKILL');
     await host.exited;
     expect(await isAuthenticatedHostAlive(info)).toBe(false);
-  });
-
-  it('is false when the endpoint is a regular file', async () => {
-    const endpoint = join(await tempDir(), 'file.sock');
-    writeFileSync(endpoint, '');
-    expect(await isAuthenticatedHostAlive(infoFor(endpoint))).toBe(false);
   });
 
   it.each<[string, FakeHostMode]>([
@@ -162,8 +155,7 @@ describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive', () => 
   ])('is false within the timeout when the listener %s', async (_label, mode) => {
     const runtimeDir = await tempDir();
     const host = await startFakeHost(runtimeDir, mode);
-    const endpoint = socketPathIn(runtimeDir);
-    const { alive, elapsed } = await probeTimed(infoFor(endpoint, host.secret));
+    const { alive, elapsed } = await probeTimed(infoFor(host.endpoint, host.secret));
     expect(alive).toBe(false);
     expect(elapsed).toBeLessThan(HOST_PROBE_TIMEOUT_MS + 500);
   });
@@ -192,5 +184,14 @@ describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive', () => 
     expect(elapsed).toBeLessThan(HOST_PROBE_TIMEOUT_MS + 500);
     await waitForClose(listener.closedConnections);
     expect(types(listener.lines.map((line) => JSON.parse(line) as Record<string, unknown>))).not.toContain('auth');
+  });
+});
+
+// On Windows every endpoint is a pipe name, so there is no file to find at one.
+describe.skipIf(process.platform === 'win32')('isAuthenticatedHostAlive on Unix sockets', () => {
+  it('is false when the endpoint is a regular file', async () => {
+    const endpoint = join(await tempDir(), 'file.sock');
+    writeFileSync(endpoint, '');
+    expect(await isAuthenticatedHostAlive(infoFor(endpoint))).toBe(false);
   });
 });

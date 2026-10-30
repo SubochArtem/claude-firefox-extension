@@ -1,15 +1,20 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { endianness, tmpdir } from 'node:os';
 import { createConnection, createServer, type Socket } from 'node:net';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { inject, onTestFinished } from 'vitest';
 
 export const APP_DIR = 'claude-firefox-extension';
 const WAIT_TIMEOUT_MS = 4_000;
 const littleEndian = endianness() === 'LE';
+const isWindows = process.platform === 'win32';
+
+// The variable that points the host and the MCP server at a test's runtime dir: the Unix socket
+// directory lives under XDG_RUNTIME_DIR, bridge.json on Windows under LOCALAPPDATA.
+export const RUNTIME_DIR_VAR = isWindows ? 'LOCALAPPDATA' : 'XDG_RUNTIME_DIR';
 
 export const hostEntry = inject('hostEntry');
 
@@ -33,7 +38,8 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => realSetTimeout(resolve, ms));
 }
 
-// Short paths under the literal /tmp keep the socket path far below the 107-byte sun_path limit.
+// Short paths under the literal /tmp keep the socket path far below the 107-byte sun_path limit. On
+// Windows the directory stands in for LOCALAPPDATA.
 export async function tempDir(): Promise<string> {
   const dir = await mkdtemp(process.platform === 'win32' ? join(tmpdir(), 'cfe-') : '/tmp/cfe-');
   onTestFinished(() => rm(dir, { recursive: true, force: true }));
@@ -46,6 +52,50 @@ export function socketPathIn(runtimeDir: string): string {
 
 export function bridgeInfoPathIn(runtimeDir: string): string {
   return join(runtimeDir, APP_DIR, 'bridge.json');
+}
+
+// A fresh endpoint for a test listener: a socket file in `dir`, or on Windows a random pipe name in
+// the format the host uses.
+export function newEndpoint(dir: string, name: string): string {
+  return isWindows ? `\\\\.\\pipe\\${APP_DIR}-${randomHex(16)}` : join(dir, `${name}.sock`);
+}
+
+// The endpoint of the host serving runtimeDir. A pipe name is random, so on Windows it is only known
+// from bridge.json while that host runs.
+export function endpointIn(runtimeDir: string): string {
+  return isWindows ? readBridgeJson(bridgeInfoPathIn(runtimeDir)).endpoint : socketPathIn(runtimeDir);
+}
+
+// A socket file is checked on disk; a pipe exists while something can connect to it.
+export async function endpointExists(endpoint: string): Promise<boolean> {
+  if (!isWindows) return existsSync(endpoint);
+  return new Promise((resolve) => {
+    const socket = createConnection(endpoint);
+    socket.once('connect', () => {
+      socket.destroy();
+      resolve(true);
+    });
+    socket.once('error', () => resolve(false));
+  });
+}
+
+export interface BridgeTarget {
+  readonly endpoint: string;
+  readonly bridgeInfoPath: string;
+}
+
+export function bridgeTargetIn(runtimeDir: string): BridgeTarget {
+  return {
+    get endpoint() {
+      return endpointIn(runtimeDir);
+    },
+    bridgeInfoPath: bridgeInfoPathIn(runtimeDir),
+  };
+}
+
+// The environment for a native host child serving runtimeDir.
+export function hostEnv(runtimeDir: string): NodeJS.ProcessEnv {
+  return isWindows ? childEnv({ LOCALAPPDATA: runtimeDir }) : { ...process.env, XDG_RUNTIME_DIR: runtimeDir };
 }
 
 export interface BridgeJson {
@@ -114,9 +164,9 @@ export function track(child: ChildProcessWithoutNullStreams): ChildHandle {
   };
 }
 
-export interface FakeExtension extends ChildHandle {
+export interface FakeExtension extends ChildHandle, BridgeTarget {
+  // The Unix socket path; meaningless on Windows, where `endpoint` is the pipe from bridge.json.
   socketPath: string;
-  bridgeInfoPath: string;
   received: unknown[];
   stdoutBytes: () => number;
   send: (message: unknown) => void;
@@ -126,13 +176,13 @@ export interface FakeExtension extends ChildHandle {
 }
 
 // Runs the built native host the way Firefox does and plays the extension on its stdio. `env`
-// replaces the default environment (the test's own plus XDG_RUNTIME_DIR), e.g. for Windows tests.
+// replaces the default environment (the test's own pointed at runtimeDir, see hostEnv).
 export async function startHost(
   runtimeDir: string,
   { waitUntilListening = true, env }: { waitUntilListening?: boolean; env?: NodeJS.ProcessEnv } = {},
 ): Promise<FakeExtension> {
   const child = spawn(process.execPath, [hostEntry, '--native-host'], {
-    env: env ?? { ...process.env, XDG_RUNTIME_DIR: runtimeDir },
+    env: env ?? hostEnv(runtimeDir),
   });
   const handle = track(child);
   const received: unknown[] = [];
@@ -159,9 +209,20 @@ export async function startHost(
       }
     }
   });
+  let pipeName: string | undefined;
   const host: FakeExtension = {
     ...handle,
     socketPath: socketPathIn(runtimeDir),
+    // On Windows, taken from bridge.json once it names this host, so another host's file never counts.
+    get endpoint(): string {
+      if (!isWindows) return socketPathIn(runtimeDir);
+      if (pipeName === undefined) {
+        const info = readBridgeJson(bridgeInfoPathIn(runtimeDir));
+        if (info.pid !== child.pid) throw new Error(`bridge.json names pid ${info.pid}, not this host (${String(child.pid)})`);
+        pipeName = info.endpoint;
+      }
+      return pipeName;
+    },
     bridgeInfoPath: bridgeInfoPathIn(runtimeDir),
     received,
     stdoutBytes: () => stdoutBytes,
@@ -225,12 +286,16 @@ export async function connectRaw(endpoint: string): Promise<BridgeClient> {
   return (await openClient(endpoint)).client;
 }
 
-// Connects the way the MCP server does: performs the handshake with the secret from bridge.json
-// (by default the one next to the socket), checks the host proof, and waits for ready. The
+// Connects the way the MCP server does: performs the handshake with the secret from the target's
+// bridge.json (or the one given with an endpoint), checks the host proof, and waits for ready. The
 // handshake lines are then dropped, so `lines` and `nextLine` only see tool traffic.
-export async function connectClient(endpoint: string, secret?: string): Promise<BridgeClient> {
+export async function connectClient(target: BridgeTarget): Promise<BridgeClient>;
+export async function connectClient(endpoint: string, secret: string): Promise<BridgeClient>;
+export async function connectClient(target: BridgeTarget | string, secret?: string): Promise<BridgeClient> {
+  const endpoint = typeof target === 'string' ? target : target.endpoint;
+  const key = typeof target === 'string' ? secret : readBridgeJson(target.bridgeInfoPath).secret;
+  if (key === undefined) throw new Error('connectClient needs a secret with a bare endpoint');
   const { client, forget } = await openClient(endpoint);
-  const key = secret ?? readBridgeJson(join(dirname(endpoint), 'bridge.json')).secret;
   const clientNonce = randomHex();
   client.send({ type: 'hello', nonce: clientNonce });
   const hello = await client.nextLine();
@@ -310,6 +375,7 @@ export const FIRST_REQUEST_ID = '1';
 export const INJECTED_TEXT = 'injected before ready';
 
 export interface FakeHost {
+  endpoint: string;
   secret: string;
   received: Record<string, unknown>[];
   requests: Record<string, unknown>[];
@@ -336,7 +402,7 @@ export interface FakeHost {
 export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'normal'): Promise<FakeHost> {
   mkdirSync(join(runtimeDir, APP_DIR), { recursive: true, mode: 0o700 });
   const secret = randomHex();
-  const endpoint = socketPathIn(runtimeDir);
+  const endpoint = newEndpoint(join(runtimeDir, APP_DIR), 'bridge');
   const received: Record<string, unknown>[] = [];
   const requests: Record<string, unknown>[] = [];
   const sockets: Socket[] = [];
@@ -403,6 +469,7 @@ export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'no
     mode: 0o600,
   });
   return {
+    endpoint,
     secret,
     received,
     requests,
