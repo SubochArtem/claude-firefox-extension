@@ -40,6 +40,24 @@ async function stdoutEnded(host: FakeExtension): Promise<void> {
   });
 }
 
+// Sends a ping at spawn and closes stdin right after it. Both orders are valid: if the host reads
+// stdin EOF before it finishes startup, it never serves and writes nothing; if it finishes startup
+// first ("listening on" is logged right before serving starts), it answers the queued ping once.
+async function pingThenCloseStdin(host: FakeExtension, bridgeInfoPath: string): Promise<void> {
+  host.send({ type: 'ping' });
+  host.child.stdin.end();
+  expect(await host.exited).toBe(0);
+  await stdoutEnded(host);
+  await host.waitForStderr(/shutting down: stdin closed/);
+  if (/listening on/.test(host.stderr())) {
+    expect(host.received).toEqual([{ type: 'pong' }]);
+    expect(host.stdoutBytes()).toBe(4 + Buffer.byteLength(JSON.stringify({ type: 'pong' })));
+  } else {
+    expect(host.stdoutBytes()).toBe(0);
+  }
+  expect(existsSync(bridgeInfoPath)).toBe(false);
+}
+
 describe('native host process', () => {
   it('uses a new secret at every start', async () => {
     const runtimeDir = await tempDir();
@@ -226,14 +244,9 @@ describe('native host process', () => {
     expect(host.stderr()).toMatch(/response for unknown request 9:9/);
   });
 
-  it('writes nothing to stdout when stdin closes right after a ping sent at spawn', async () => {
+  it('answers at most once and exits cleanly when stdin closes right after a ping sent at spawn', async () => {
     const host = await startHost(await tempDir(), { waitUntilListening: false });
-    host.send({ type: 'ping' });
-    host.child.stdin.end();
-    expect(await host.exited).toBe(0);
-    await stdoutEnded(host);
-    expect(host.stdoutBytes()).toBe(0);
-    expect(existsSync(host.bridgeInfoPath)).toBe(false);
+    await pingThenCloseStdin(host, host.bridgeInfoPath);
   });
 
   it('removes its own leftover bridge.json temp files on exit and keeps those of other processes', async () => {
@@ -726,15 +739,10 @@ describe.runIf(process.platform === 'win32')('native host on Windows', () => {
     expect(host.child.exitCode).toBeNull();
   });
 
-  it('writes nothing to stdout when stdin closes right after a ping sent at spawn', async () => {
+  it('answers at most once and exits cleanly when stdin closes right after a ping sent at spawn', async () => {
     const localAppData = await windowsTempDir();
     const host = await startHost(localAppData, { waitUntilListening: false, env: childEnv({ LOCALAPPDATA: localAppData }) });
-    host.send({ type: 'ping' });
-    host.child.stdin.end();
-    expect(await host.exited).toBe(0);
-    await stdoutEnded(host);
-    expect(host.stdoutBytes()).toBe(0);
-    expect(existsSync(join(localAppData, APP_DIR, 'bridge.json'))).toBe(false);
+    await pingThenCloseStdin(host, join(localAppData, APP_DIR, 'bridge.json'));
   });
 
   it('replaces a bridge.json whose endpoint has no authenticated host', async () => {
