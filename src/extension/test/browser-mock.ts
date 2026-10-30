@@ -99,6 +99,10 @@ export function mockBrowser() {
     ),
     goBack: vi.fn<(tabId: number) => Promise<void>>(async () => {}),
     goForward: vi.fn<(tabId: number) => Promise<void>>(async () => {}),
+    create: vi.fn<(properties: browser.tabs._CreateCreateProperties) => Promise<Partial<browser.tabs.Tab>>>(
+      async () => ({ id: 1 }),
+    ),
+    remove: vi.fn<(tabIds: number | number[]) => Promise<void>>(async () => {}),
     onRemoved: createEvent<[tabId: number, removeInfo: browser.tabs._OnRemovedRemoveInfo]>(),
   };
   const webNavigation = {
@@ -109,8 +113,16 @@ export function mockBrowser() {
     onReferenceFragmentUpdated: createEvent<[details: NavigationDetails]>(),
     onHistoryStateUpdated: createEvent<[details: NavigationDetails]>(),
   };
+  const windows = {
+    get: vi.fn<(windowId: number) => Promise<Partial<browser.windows.Window>>>(async (windowId) => {
+      throw new Error(`Invalid window ID: ${windowId}`);
+    }),
+    getLastFocused: vi.fn<() => Promise<Partial<browser.windows.Window>>>(async () => {
+      throw new Error('No window');
+    }),
+  };
   const events = [tabs.onRemoved, ...Object.values(webNavigation)];
   const listenerCount = () => events.reduce((sum, event) => sum + event.listenerCount(), 0);
-  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation });
-  return { ports, connectNative, alarms, query, tabs, webNavigation, listenerCount };
+  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation, windows });
+  return { ports, connectNative, alarms, query, tabs, webNavigation, windows, listenerCount };
 }

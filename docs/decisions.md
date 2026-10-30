@@ -90,6 +90,10 @@ If writing or registration fails, files that existed before the run get their pr
 
 - `navigation-input.ts`: pure argument validation for `navigate`, `tabs_create`, `tabs_close`: http(s)-only URL normalization, no userinfo or control characters, `back`/`forward`, positive `tabId`.
 - `navigate.ts`: uses `tabs.update`/`goBack`/`goForward` and waits on `webNavigation` events for load, same-document change, download, network error, closed tab or timeout (2 s for the navigation to start, 20 s total).
+- `navigate.ts` ignores `about:blank` events while waiting for an http(s) url: Firefox reports the `about:blank` load of a tab created by `tabs.create` after the call has resolved.
+- `tabs.ts`: `tabs_create` opens a background tab (`about:blank`, `active: false`) in the last focused window, which must be a normal one (Firefox ignores the `windowTypes` filter of `windows.getLastFocused`, so its type is checked); with a url it loads it through navigate's waiting and keeps the tab open if the load fails.
+- `tabs.ts`: `tabs_close` closes only tabs of normal windows, refuses the last tab of the last normal window (closing it would close the window and may quit Firefox), and reports success only after the tab is gone (`tabs.onRemoved` or `tabs.get` failing, 5 s timeout, e.g. for a `beforeunload` prompt).
+- `windows.get` and `windows.getLastFocused` need no manifest permission.
 - `tool-error.ts`: `ToolError` marks an expected failure whose message reaches the agent without the generic prefix.
 
 ## Native host installation paths
@@ -131,10 +135,11 @@ TDD where it fits: logic with a spec known up front (protocols, framing, multipl
 1. Installs the native host.
 2. Loads the extension with the `web-ext` Node API in a temporary profile and waits for `bridge.json`.
 3. Calls `tabs_context` through the MCP server (SDK default environment).
-4. Checks that a tool request without the handshake is closed unanswered.
-5. Runs a second Firefox for 40 s and requires 2 to 10 native host starts from it (counted by a `NODE_OPTIONS` preload) with `bridge.json` unchanged.
-6. Stops the first Firefox and expects `bridge.json` removed and the not-connected error.
-7. Uninstalls.
+4. Opens a tab with `tabs_create` on a page served by the script on `127.0.0.1` and a blank one, checks each appears in `tabs_context`, closes it with `tabs_close` and checks it is gone.
+5. Checks that a tool request without the handshake is closed unanswered.
+6. Runs a second Firefox for 40 s and requires 2 to 10 native host starts from it (counted by a `NODE_OPTIONS` preload) with `bridge.json` unchanged.
+7. Stops the first Firefox and expects `bridge.json` removed and the not-connected error.
+8. Uninstalls.
 
 It prints a PASS/FAIL summary and exits non-zero on failure. `E2E_FIREFOX` overrides the Firefox binary.
 

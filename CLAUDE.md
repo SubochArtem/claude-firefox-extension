@@ -33,6 +33,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Permissions and host permissions are added in the feature that first needs them, not up front.
 - Firefox MV3 host permissions are opt-in: a feature that needs them must document granting them in `about:addons` or request them at runtime.
 - Bridge: the native host listens on a private Unix socket (Linux, macOS) or a random named pipe (Windows), publishes `bridge.json` with a per-start secret, runs a mutual HMAC handshake with every MCP server process, then multiplexes newline-delimited JSON by rewriting ids to `<clientId>:<id>`; see [Bridge protocol](docs/decisions.md#bridge-protocol) for endpoints, `bridge.json`, the Windows second-host check, limits and startup buffering/backoff.
+- tabs_create opens a background tab in the last focused normal window; tabs_close refuses the last tab of the last normal window.
 - Tab scope: until `feature/permissions`, the agent may navigate and close any tab in any normal window (user decision); revisited there together with per-site permissions and the agent container.
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
@@ -58,7 +59,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/tests`: Vitest setup and `npm test`; tests for the existing host (native messaging framing, JSON lines, client multiplexing, timeouts, socket directory checks, MCP server against a fake extension) and the extension tool registry / `tabs_context` with a mocked `browser.*`.
 - [x] `feature/windows-support`: named pipe with a random name per host start plus the authenticated bridge handshake, installer writing `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` and a `.bat` wrapper, Windows paths in host and scripts.
 - [ ] `feature/amo-signing`: reserve a real extension id on AMO, sign with `web-ext sign` (unlisted), permanent install in release Firefox, verify `runtime.onStartup` reconnect. Needs the user's AMO account and API keys; timing decided separately.
-- [ ] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
+- [x] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
 - [ ] `feature/screenshot`: screenshots via `tabs.captureVisibleTab`.
 - [ ] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); user choice between a dedicated agent container (`contextualIdentities`, isolated cookies and logins) and the normal profile, with default, switch location and per-domain mixing decided at the start; design after researching how Claude in Chrome does it.
 - [ ] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
@@ -94,6 +95,7 @@ src/                   npm package root; every command is run from here
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
+      tabs.ts          tabs_create and tabs_close tools
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included

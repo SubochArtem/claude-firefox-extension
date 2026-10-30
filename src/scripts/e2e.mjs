@@ -1,6 +1,7 @@
 import { execFile, spawnSync } from 'node:child_process';
 import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { createConnection } from 'node:net';
 import { tmpdir, userInfo } from 'node:os';
 import { delimiter, dirname, join, relative, sep } from 'node:path';
@@ -54,6 +55,8 @@ const firefoxes = [];
 const tempDirs = [];
 /** @type {Client | undefined} */
 let mcpClient;
+/** @type {import('node:http').Server | undefined} */
+let pageServer;
 let mcpStderr = '';
 let installed = false;
 /** Set only for a local --force run: the temporary HOME and the environment passed to the MCP server. */
@@ -365,6 +368,57 @@ async function startMcp() {
   return client;
 }
 
+const PAGE_TITLE = 'Claude Firefox Extension e2e page';
+
+/** Serves one small HTML page on 127.0.0.1 for the navigation checks and returns its url. */
+async function startPageServer() {
+  const server = createServer((_request, response) => {
+    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    response.end(`<!doctype html><title>${PAGE_TITLE}</title><p>e2e</p>`);
+  });
+  pageServer = server;
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => resolve(undefined));
+  });
+  const address = server.address();
+  check(address !== null && typeof address === 'object', 'the e2e page server has no address');
+  return `http://127.0.0.1:${address.port}/page`;
+}
+
+/**
+ * @param {Client} client
+ * @returns {Promise<number[]>}
+ */
+async function tabIds(client) {
+  const result = await client.callTool({ name: 'tabs_context', arguments: {} });
+  const text = resultText(result);
+  check(!result.isError, `tabs_context failed: ${text}`);
+  return JSON.parse(text).tabs.map((/** @type {{ tabId: number }} */ tab) => tab.tabId);
+}
+
+/**
+ * Creates a tab through tabs_create, checks it is listed, closes it through tabs_close and checks it
+ * is gone.
+ * @param {Client} client
+ * @param {Record<string, unknown>} args
+ * @param {RegExp} expected
+ */
+async function createAndCloseTab(client, args, expected) {
+  const created = await client.callTool({ name: 'tabs_create', arguments: args });
+  const createdText = resultText(created);
+  check(!created.isError, `tabs_create failed: ${createdText}`);
+  const match = expected.exec(createdText);
+  check(match?.[1] !== undefined, `unexpected tabs_create result: ${createdText}`);
+  const tabId = Number(match[1]);
+  check((await tabIds(client)).includes(tabId), `tab ${tabId} from tabs_create is missing in tabs_context`);
+  const closed = await client.callTool({ name: 'tabs_close', arguments: { tabId } });
+  const closedText = resultText(closed);
+  check(!closed.isError && closedText.startsWith(`Closed tab ${tabId}\n`), `tabs_close failed: ${closedText}`);
+  check(!(await tabIds(client)).includes(tabId), `tab ${tabId} is still listed after tabs_close`);
+  return tabId;
+}
+
 /**
  * Connects without the handshake, sends a tool request and reports what came back before the host
  * closed the connection.
@@ -540,6 +594,20 @@ async function main() {
     return `${context.tabs.length} tab(s)`;
   });
 
+  await step('tabs_create and tabs_close through the MCP server', async () => {
+    const client = mcpClient;
+    check(client !== undefined, 'no MCP client');
+    const url = await startPageServer();
+    const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const loaded = await createAndCloseTab(
+      client,
+      { url },
+      new RegExp(`^Created tab (\\d+) and navigated to ${escaped}\\nTitle: ${PAGE_TITLE}\\n`),
+    );
+    const blank = await createAndCloseTab(client, {}, /^Created tab (\d+)\n/);
+    return `tab ${loaded} with ${url}, blank tab ${blank}`;
+  });
+
   await step('a tool request without the handshake is closed unanswered', async () => {
     const info = readBridgeJson(infoPath);
     check(info !== undefined, 'bridge.json disappeared');
@@ -607,6 +675,8 @@ async function main() {
 
 async function cleanup() {
   await mcpClient?.close().catch(() => {});
+  pageServer?.closeAllConnections();
+  pageServer?.close();
   for (const instance of firefoxes) {
     if (!hasExited(instance.firefox)) await stopFirefox(instance);
   }
