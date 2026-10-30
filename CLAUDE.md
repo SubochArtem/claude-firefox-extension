@@ -19,6 +19,8 @@ Claude Code ──MCP (stdio)──> native host ──native messaging──> F
 
 Browser tools follow the shape Claude already works well with: `computer`, `navigate`, `read_page`, `find`, `form_input`, `get_page_text`, `javascript_tool`, `tabs_*`, `read_console_messages`, `read_network_requests`, `resize_window`.
 
+Tool names are plain, without an `_mcp` suffix: `tabs_context`, `navigate`, `tabs_create`, `tabs_close`.
+
 The native host is a local program installed on the user's machine, not a hosted server. Claude Code starts the MCP side over stdio, Firefox starts the native messaging side; the two processes talk over a local channel.
 
 ## Decisions
@@ -38,6 +40,7 @@ The native host is a local program installed on the user's machine, not a hosted
   - Every connection, on all platforms, runs a mutual HMAC-SHA256 handshake before any tool traffic: client `hello` with a nonce, host `hello` with its nonce and host proof, client `auth` with its proof, host `ready`. Proofs are HMAC over `label:clientNonce:serverNonce` keyed with the secret; the client checks the host proof before revealing its own. Either side closes on any other message before `ready`.
   - Limits before `ready`: 2 s from connect, at most 8 unauthenticated connections on the host, 4 KiB per line on the host; after `ready`, 64 MB per line.
   - The native host processes no native message before it has decided to serve (listening, second-host check passed, `bridge.json` written); earlier messages are buffered and replayed in order, and a host that exits before that writes nothing to stdout. The extension resets its reconnect backoff only after a connection has stayed up for 10 s after its pong, so a host that answers and exits right away cannot make it retry every second.
+- Tab scope: until `feature/permissions`, the agent may navigate and close any tab in any normal window (user decision). Tab scoping is revisited in `feature/permissions` together with per-site permissions and the agent container.
 - Tests: Vitest, run with `npm test` from `src/`. Every feature ships with its own automated tests.
 - TDD where it fits: logic with a spec known up front (protocols, framing, multiplexing, parsing, accessibility tree and `ref_N` resolution, argument validation, translating `computer` actions to WebDriver BiDi) gets its tests written first, reviewed, then the implementation. Code whose correctness depends on real Firefox behavior (native messaging lifecycle, event page suspension, `captureVisibleTab`, permissions, BiDi) is written first and covered afterwards, together with a check in a real Firefox.
 - Windows support is required. `feature/windows-support` delivers the authenticated bridge above and the Windows installer. The installer creates `%LOCALAPPDATA%\claude-firefox-extension\`, hardens it with `icacls` (inheritance removed, full control for the current user's SID, SYSTEM and Administrators only) while it is still empty, then writes `native-host.bat` (CRLF; `@echo off`, `setlocal DisableDelayedExpansion`, `chcp 65001`, then the quoted Node binary and host entry with `--native-host %*`) and `claude_firefox_extension.json`, both UTF-8, and registers the manifest last as the default value of `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` with `reg.exe /reg:64`. If writing or registration fails, files that existed before the run get their previous content back (an older registry entry may still point at them) and new ones are removed. Uninstall deletes the key first and keeps the files if `reg.exe` fails or cannot run; it keeps the directory while it still holds `bridge.json` or a running host holds it open (`EBUSY`). `whoami.exe`, `icacls.exe` and `reg.exe` are run by their absolute `%SystemRoot%\System32` path without a shell. Accepted edge cases, checked manually on Windows: with delayed expansion enabled globally in the registry, cmd leaves a single `!` in the `.bat` path alone and only mangles it when two `!` enclose the name of a defined variable, which practically never happens in a profile path; Firefox starts `cmd.exe /s/c "<bat> <manifest> <id>"` without quoting the `.bat` path when it has no spaces, so an install path with `&` or `^` and no space cannot be started (confirmed), and the installer prints a warning for it. Only `&` and `^` were verified for the unquoted `.bat` path; other cmd metacharacters (`,`, `;`, `=`, `%name%`) are untested.
@@ -49,10 +52,11 @@ The native host is a local program installed on the user's machine, not a hosted
 - Windows pipe access: pipe names are enumerable by any user, but the default pipe DACL (verified: Everyone and ANONYMOUS LOGON read only; SYSTEM, Administrators and the owner full control) keeps another standard user from opening the pipe for read/write or adding an instance (verified with a second account). Keeping all unauthenticated connection slots busy is therefore only possible for processes that can already open the pipe; it would be denial of service only, nothing can be read or forged. Remote clients are not tested; they would need write access too.
 - Before distribution: the extension id `claude-firefox-extension@localhost` is not reserved; another add-on with the same id signed on addons.mozilla.org could reach the native host if installed. Fixed by `feature/amo-signing`.
 - Next major risk: prompt injection from page content once page-reading and JavaScript tools exist. Addressed by `feature/permissions` (per-site approval, confirmation of sensitive actions, optional agent container so the agent is not signed in to the user's accounts), which must land before `feature/accessibility-tree` and `feature/devtools-tools`.
+- Known, accepted for now: `navigate` and `tabs_close` work on any tab, including tabs the user is working in; a misled agent can navigate them away or close them. Accepted until `feature/permissions` scopes the agent's tabs.
 
 ## Roadmap
 
-Each feature is its own branch from `main`. The feature's last commit marks it `[x]` here.
+Each feature is delivered as a series of small pull requests, one coherent part each, on branches `feature/<feature>-<part>` from the updated `main`. The feature's last pull request marks it `[x]` here.
 
 - [x] `feature/project-setup`: `package.json`, `tsconfig`, `web-ext`, build, folder structure; fill in Repository layout and Commands below.
 - [x] `feature/extension-skeleton`: Firefox MV3 `manifest.json` and background script; the extension loads without errors.
@@ -93,6 +97,9 @@ src/                   npm package root; every command is run from here
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
     test/              unit tests with a mocked `browser` global (browser-mock.ts); not copied into dist
+    tools/             tool handlers and registry (index.ts)
+      navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close: http(s)-only URL
+                           normalization, no userinfo or control characters, back/forward, positive tabId
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included
     test/              unit tests, process tests against the bundled host, in-process timeout tests with fake timers;
