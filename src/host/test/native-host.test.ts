@@ -560,11 +560,12 @@ describe('native host handshake', () => {
   it('frees exactly one slot per closed connection whatever closed it, so at most 8 stay unauthenticated afterwards', async () => {
     const host = await startHost(await tempDir());
     const raw = (step: string) => within(connectRaw(host.endpoint), 1_000, step);
-    // Over the cap: eight closed by the handshake timeout, one destroyed on connect without a slot.
-    const timedOut = await within(Promise.all(Array.from({ length: 8 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 8 timed-out clients');
-    const refused = await raw('connect the refused client');
-    await within(refused.closed, 1_000, 'host closes the refused client');
-    await within(Promise.all(timedOut.map((client) => client.closed)), 3_000, 'handshake timeout closes the 8 clients');
+    // Over the cap: one of the nine is destroyed on accept without a slot, the other eight are closed
+    // by the handshake timeout. Which one is refused is not fixed: a Windows pipe server may accept
+    // connections in a different order than they were made.
+    const overCap = await within(Promise.all(Array.from({ length: 9 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 9 clients over the cap');
+    await within(Promise.all(overCap.map((client) => client.closed)), 3_000, 'host closes the 9 clients over the cap');
+    for (const client of overCap) expect(client.lines).toEqual([]);
 
     const wrongProof = await raw('connect the wrong-proof client');
     const { clientNonce, serverNonce } = await hello(wrongProof);
@@ -591,16 +592,14 @@ describe('native host handshake', () => {
     // earlier close has been handled. Authenticated connections hold no slot.
     await within(connectClient(host), 1_000, 'authenticate after the closes');
 
-    const silent = await within(Promise.all(Array.from({ length: 12 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 12 silent clients');
+    const silent = await within(Promise.all(Array.from({ length: 13 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 13 silent clients');
     // A connect completes once the kernel queues it (Unix socket) or a pipe instance takes it
-    // (Windows), before the host accepts it. The host accepts in that order and the cap is full after
-    // the silent ones, so once the probe is refused every silent connection has been accepted or
-    // refused.
-    const probe = await raw('connect the probe');
-    await waitFor(() => expect(probe.isClosed()).toBe(true), 1_000);
-    await waitFor(() => expect(silent.filter((client) => client.isClosed())).toHaveLength(4), 1_000);
+    // (Windows), before the host accepts it, and a Windows pipe server may accept out of order. The
+    // host refuses only while all 8 slots are taken and none is freed before the handshake timeout,
+    // so once 5 are refused the other 8 hold the slots and every connection has been handled.
+    await waitFor(() => expect(silent.filter((client) => client.isClosed())).toHaveLength(5), 1_000);
     expect(silent.filter((client) => !client.isClosed())).toHaveLength(8);
-    for (const client of [...silent, probe]) expect(client.lines).toEqual([]);
+    for (const client of silent) expect(client.lines).toEqual([]);
   }, 10_000);
 });
 

@@ -107,4 +107,18 @@ describe('BridgeConnection', () => {
     expect(net.sockets).toHaveLength(2);
     await expectNewConnectionSurvives(bridge, host, releaseClose);
   });
+
+  it('does not send on a connection the host has half-closed before its close event arrived', async () => {
+    const { bridge, host } = await connectedBridge();
+    expect(await bridge.call('tabs_context', {})).toEqual(ANSWER);
+    const ended = net.sockets[0] as Socket;
+    const releaseClose = holdCloseEvent(ended);
+    const endReceived = new Promise((resolve) => ended.once('end', resolve));
+    host.endConnections();
+    await endReceived;
+    expect([NOT_CONNECTED_RESULT, ANSWER]).toContainEqual(await bridge.call('tabs_context', {}));
+    expect(await bridge.call('tabs_context', {})).toEqual(ANSWER);
+    expect(net.sockets).toHaveLength(2);
+    await expectNewConnectionSurvives(bridge, host, releaseClose);
+  });
 });

@@ -45,7 +45,7 @@ export class BridgeConnection {
       return errorResult(`Could not reach the native host: ${(error as Error).message}`);
     }
     // The socket may have closed between connecting and this call resuming.
-    if (socket.destroyed) return errorResult(NOT_CONNECTED_MESSAGE);
+    if (!isOpen(socket)) return errorResult(NOT_CONNECTED_MESSAGE);
 
     const id = String(this.nextRequestId++);
     const request: ToolRequest = { type: 'tool_request', id, tool, args };
@@ -73,9 +73,9 @@ export class BridgeConnection {
   // Concurrent calls share one connection attempt and one handshake. bridge.json is read on every
   // attempt, because a restarted host has a new secret and, on Windows, a new pipe name.
   private connect(): Promise<Socket> {
-    // A socket is destroyed synchronously but its 'close' event follows later, so a dead socket can
-    // still be cached here; it is dropped instead of being handed to another call.
-    if (this.socket?.destroyed) this.socket = undefined;
+    // A socket is destroyed or ended by the host synchronously but its 'close' event follows later,
+    // so a dead socket can still be cached here; it is dropped instead of being handed to another call.
+    if (this.socket && !isOpen(this.socket)) this.socket = undefined;
     if (this.socket) return Promise.resolve(this.socket);
     this.connecting ??= this.open().finally(() => {
       this.connecting = undefined;
@@ -117,6 +117,10 @@ export class BridgeConnection {
       socket.destroy();
       return;
     }
+    // The host half-closes its connections on shutdown. Writing to such a socket fails with "This
+    // socket has been ended by the other party", so it is torn down to take the regular close path.
+    if (socket.readableEnded) socket.destroy();
+    else socket.once('end', () => socket.destroy());
     this.socket = socket;
     // The close event of a socket that has already been replaced must not drop the new connection.
     socket.on('close', () => {
@@ -146,6 +150,10 @@ export class BridgeConnection {
     this.pending.delete(response.id);
     call.resolve(response);
   }
+}
+
+function isOpen(socket: Socket): boolean {
+  return !socket.destroyed && !socket.readableEnded && !socket.writableEnded;
 }
 
 function errorResult(text: string): CallToolResult {

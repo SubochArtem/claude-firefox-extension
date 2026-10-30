@@ -392,6 +392,7 @@ export interface FakeHost {
   closedConnections: () => number;
   answer: (message: unknown) => void;
   respondWith: (handler: (request: Record<string, unknown>) => unknown) => void;
+  endConnections: () => void;
   close: () => Promise<void>;
 }
 
@@ -407,7 +408,8 @@ export interface FakeHost {
 // - 'response-instead-of-ready' accepts the auth but sends that tool_response instead of ready;
 // - 'close-after-ready' sends ready and ends the connection in the same call.
 // Every line the MCP server sends lands in `received`; `requests` holds the lines that are not part
-// of the handshake.
+// of the handshake. `endConnections` half-closes every connection, as the native host does on
+// shutdown.
 export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'normal'): Promise<FakeHost> {
   mkdirSync(join(runtimeDir, APP_DIR), { recursive: true, mode: 0o700 });
   const secret = randomHex();
@@ -490,6 +492,9 @@ export async function startFakeHost(runtimeDir: string, mode: FakeHostMode = 'no
     },
     respondWith: (next) => {
       handler = next;
+    },
+    endConnections: () => {
+      for (const socket of sockets) socket.end();
     },
     close,
   };
