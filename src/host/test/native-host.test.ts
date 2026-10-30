@@ -498,21 +498,27 @@ describe('native host handshake', () => {
   it('keeps at most 8 unauthenticated connections, closes idle ones after 2 s without writing, then accepts again', async () => {
     const host = await startHost(await tempDir());
     const started = Date.now();
-    const idle = await Promise.all(Array.from({ length: 8 }, () => connectRaw(host.endpoint)));
-    const extra = await connectRaw(host.endpoint);
-    await extra.closed;
-    expect(extra.lines).toEqual([]);
-    expect(idle.every((client) => !client.isClosed())).toBe(true);
+    const clients = await within(Promise.all(Array.from({ length: 9 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 9 clients');
+    // Which one is refused is not fixed: a Windows pipe server may accept connections in a different
+    // order than they were made. The refusal happens on accept, far below the 2 s handshake timeout.
+    await waitFor(() => expect(clients.filter((client) => client.isClosed())).toHaveLength(1), 1_000);
+    expect(clients.filter((client) => !client.isClosed())).toHaveLength(8);
+    // Far below the 2 s handshake timeout: no further connection may be refused or closed meanwhile.
+    await sleep(100);
+    const idle = clients.filter((client) => !client.isClosed());
+    expect(idle).toHaveLength(8);
+    expect(clients.filter((client) => client.isClosed())).toHaveLength(1);
+    for (const client of clients) expect(client.lines).toEqual([]);
 
-    await Promise.all(idle.map((client) => client.closed));
+    await within(Promise.all(idle.map((client) => client.closed)), 3_000, 'host closes the 8 idle clients after the handshake timeout');
     expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
     for (const client of idle) expect(client.lines).toEqual([]);
 
     host.respondWith((request) => textResult(request['id'], 'slots freed'));
-    const client = await connectClient(host);
+    const client = await within(connectClient(host), 1_000, 'authenticate after the idle clients are closed');
     client.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
     expect(await client.nextLine()).toEqual(textResult('1', 'slots freed'));
-  });
+  }, 10_000);
 
   // Handshake messages are tiny; the 4 KiB cap keeps unauthenticated peers from making the host buffer
   // up to the 64 MB limit that applies after ready.
