@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          # The floor of engines.node (">=24"). A range here would resolve against whatever Node
+          # versions the runner image has cached, so the tested version would drift between images.
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run lint
+      - run: npm test
+
+  e2e:
+    name: e2e (${{ matrix.os }})
+    needs: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: src
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: src/package-lock.json
+
+      # Runner images can lag behind the Firefox release that strict_min_version requires, so the
+      # current release is installed from Mozilla's official download service into RUNNER_TEMP,
+      # next to (not over) the preinstalled one, and passed to the e2e through E2E_FIREFOX.
+      - name: Install current Firefox (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/firefox-download"
+          install="$RUNNER_TEMP/firefox-release"
+          mkdir -p "$download" "$install"
+          curl --fail --location --silent --show-error --retry 3 --output "$download/firefox.tar" \
+            'https://download.mozilla.org/?product=firefox-latest-ssl&os=linux64&lang=en-US'
+          sha256sum "$download/firefox.tar"
+          # The archive has been .tar.bz2 and is .tar.xz now; GNU tar detects the compression itself.
+          tar -xf "$download/firefox.tar" -C "$install"
+          echo "E2E_FIREFOX=$install/firefox/firefox" >> "$GITHUB_ENV"
+
+      - name: Install current Firefox (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/firefox-download"
+          install="$RUNNER_TEMP/firefox-release"
+          mount="$RUNNER_TEMP/firefox-dmg"
+          mkdir -p "$download" "$install"
+          curl --fail --location --silent --show-error --retry 3 --output "$download/firefox.dmg" \
+            'https://download.mozilla.org/?product=firefox-latest-ssl&os=osx&lang=en-US'
+          shasum -a 256 "$download/firefox.dmg"
+          hdiutil attach "$download/firefox.dmg" -nobrowse -readonly -mountpoint "$mount"
+          ditto "$mount/Firefox.app" "$install/Firefox.app"
+          hdiutil detach "$mount"
+          echo "E2E_FIREFOX=$install/Firefox.app/Contents/MacOS/firefox" >> "$GITHUB_ENV"
+
+      - name: Install current Firefox (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $download = Join-Path $env:RUNNER_TEMP 'firefox-download'
+          $install = Join-Path $env:RUNNER_TEMP 'firefox-release'
+          New-Item -ItemType Directory -Force -Path $download | Out-Null
+          $setup = Join-Path $download 'firefox-setup.exe'
+          Invoke-WebRequest -Uri 'https://download.mozilla.org/?product=firefox-latest-ssl&os=win64&lang=en-US' `
+            -OutFile $setup -MaximumRetryCount 3
+          "SHA256 $((Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash)  $setup"
+          $process = Start-Process -FilePath $setup -Wait -PassThru `
+            -ArgumentList '/S', "/InstallDirectoryPath=$install", '/MaintenanceService=false', `
+              '/DesktopShortcut=false', '/StartMenuShortcut=false', '/TaskbarShortcut=false'
+          if ($process.ExitCode -ne 0) { throw "Firefox installer exited with $($process.ExitCode)" }
+          $firefox = Join-Path $install 'firefox.exe'
+          if (-not (Test-Path -LiteralPath $firefox)) { throw "$firefox was not installed" }
+          "E2E_FIREFOX=$firefox" >> $env:GITHUB_ENV
+
+      - name: Firefox version (Linux, macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: '"$E2E_FIREFOX" --version'
+
+      # firefox.exe is a GUI program, so --version prints nothing to the console; application.ini has it.
+      - name: Firefox version (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Select-String -Path (Join-Path (Split-Path $env:E2E_FIREFOX) 'application.ini') `
+            -Pattern '^(Version|BuildID)=' | ForEach-Object { $_.Line }
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm run e2e

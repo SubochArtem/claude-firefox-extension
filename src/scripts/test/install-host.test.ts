@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -9,7 +9,7 @@ import { NATIVE_HOST_NAME as EXTENSION_HOST_NAME } from '../../extension/protoco
 import { NATIVE_HOST_NAME } from '../../host/protocol';
 
 const run = promisify(execFile);
-const installer = fileURLToPath(new URL('../install-host.mjs', import.meta.url));
+const scriptsDir = fileURLToPath(new URL('..', import.meta.url));
 const extensionManifest = JSON.parse(
   readFileSync(fileURLToPath(new URL('../../extension/manifest.json', import.meta.url)), 'utf8'),
 ) as { browser_specific_settings: { gecko: { id: string } } };
@@ -40,7 +40,11 @@ beforeEach(async () => {
   };
   await mkdir(join(packageDir, 'scripts'), { recursive: true });
   await mkdir(layout.home);
-  await copyFile(installer, join(packageDir, 'scripts/install-host.mjs'));
+  for (const name of await readdir(scriptsDir)) {
+    if (name.startsWith('install-host') && name.endsWith('.mjs')) {
+      await copyFile(join(scriptsDir, name), join(packageDir, 'scripts', name));
+    }
+  }
 });
 
 async function writeFakeBuild(): Promise<void> {
@@ -115,6 +119,17 @@ describe.runIf(process.platform === 'linux')('install-host', () => {
     await runInstaller();
     expect(statSync(wrapper).mode & 0o777).toBe(0o755);
     expect(await readFile(wrapper, 'utf8')).toMatch(/^#!\/bin\/sh\n/);
+  });
+
+  it('prints the paths it would write with --print-paths and writes nothing', async () => {
+    await writeFakeBuild();
+    const { stdout } = await runInstaller(['--print-paths']);
+    expect(JSON.parse(stdout)).toEqual({
+      manifest: manifestPath(),
+      wrapper: join(layout.dataHome, 'claude-firefox-extension/native-host'),
+    });
+    expect(existsSync(join(layout.home, '.mozilla'))).toBe(false);
+    expect(existsSync(layout.dataHome)).toBe(false);
   });
 
   it('prints the quoted claude mcp add command', async () => {

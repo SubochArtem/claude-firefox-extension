@@ -14,7 +14,8 @@ let bridge: typeof import('../native-bridge');
 beforeEach(async () => {
   vi.spyOn(console, 'log').mockImplementation(() => {});
   vi.spyOn(console, 'warn').mockImplementation(() => {});
-  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  // Date is faked too, so a stability check may use timestamps or a timer.
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
   browserMock = mockBrowser();
   // native-bridge keeps its connection state in module scope, so every test gets a fresh copy.
   vi.resetModules();
@@ -71,8 +72,7 @@ describe('pong handling', () => {
   it('clears the reconnect alarm and the pong timeout', () => {
     const port = connectAndPong();
     expect(browserMock.alarms.clear).toHaveBeenCalledExactlyOnceWith(RECONNECT_ALARM);
-    expect(vi.getTimerCount()).toBe(0);
-    vi.advanceTimersByTime(PONG_TIMEOUT_MS * 2);
+    vi.advanceTimersByTime(PONG_TIMEOUT_MS + 1);
     expect(port.disconnect).not.toHaveBeenCalled();
     expect(browserMock.connectNative).toHaveBeenCalledTimes(1);
   });
@@ -124,7 +124,24 @@ describe('reconnect backoff', () => {
     );
   });
 
-  it('resets the delay to 1 s after a pong', () => {
+  it('uses a 10 s stability period', () => {
+    expect(bridge.STABLE_CONNECTION_MS).toBe(10_000);
+  });
+
+  // A second Firefox gets a pong from a host that then exits because another host is running; a
+  // reset on that pong would retry every second forever.
+  it('keeps doubling up to the cap when every connection answers pong and drops 100 ms later', () => {
+    bridge.connect();
+    for (const delay of [1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000]) {
+      lastPort().emitMessage({ type: 'pong' });
+      vi.advanceTimersByTime(100);
+      lastPort().emitDisconnect('Native host has exited.');
+      expectReconnectAfter(delay);
+    }
+    expect(console.log).toHaveBeenCalledWith('Connected to native host');
+  });
+
+  it('does not reset the delay on a pong alone', () => {
     bridge.connect();
     lastPort().emitDisconnect();
     expectReconnectAfter(1_000);
@@ -132,7 +149,90 @@ describe('reconnect backoff', () => {
     expectReconnectAfter(2_000);
     lastPort().emitMessage({ type: 'pong' });
     lastPort().emitDisconnect();
+    expectReconnectAfter(4_000);
+  });
+
+  it('does not reset the delay after a connection that stayed up just under the stability period', () => {
+    bridge.connect();
+    lastPort().emitDisconnect();
     expectReconnectAfter(1_000);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(2_000);
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(bridge.STABLE_CONNECTION_MS - 1);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(4_000);
+  });
+
+  it('resets the delay to 1 s after a connection stayed up for the stability period, then doubles again', () => {
+    bridge.connect();
+    lastPort().emitDisconnect();
+    expectReconnectAfter(1_000);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(2_000);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(4_000);
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(bridge.STABLE_CONNECTION_MS);
+    expect(browserMock.connectNative).toHaveBeenCalledTimes(4);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(1_000);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(2_000);
+  });
+
+  it('does not count a connection without a pong as stable before its pong timeout', () => {
+    bridge.connect();
+    lastPort().emitDisconnect();
+    expectReconnectAfter(1_000);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(2_000);
+    vi.advanceTimersByTime(PONG_TIMEOUT_MS - 1);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(4_000);
+  });
+
+  it('backs off again when a connection drops quickly after a stable one', () => {
+    bridge.connect();
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(bridge.STABLE_CONNECTION_MS);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(1_000);
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(100);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(2_000);
+  });
+
+  it('neither restarts nor shortens the stability period on a duplicate pong', () => {
+    bridge.connect();
+    lastPort().emitDisconnect();
+    expectReconnectAfter(1_000);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(2_000);
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(bridge.STABLE_CONNECTION_MS / 2);
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(bridge.STABLE_CONNECTION_MS / 2 - 1);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(4_000);
+
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(bridge.STABLE_CONNECTION_MS / 2);
+    lastPort().emitMessage({ type: 'pong' });
+    vi.advanceTimersByTime(bridge.STABLE_CONNECTION_MS / 2);
+    lastPort().emitDisconnect();
+    expectReconnectAfter(1_000);
+  });
+
+  it('logs the connection and clears the reconnect alarm on every pong, stable or not', () => {
+    bridge.connect();
+    lastPort().emitMessage({ type: 'pong' });
+    lastPort().emitDisconnect();
+    expectReconnectAfter(1_000);
+    lastPort().emitMessage({ type: 'pong' });
+    expect(browserMock.alarms.clear.mock.calls).toEqual([[RECONNECT_ALARM], [RECONNECT_ALARM]]);
+    expect(vi.mocked(console.log).mock.calls.filter(([text]) => text === 'Connected to native host')).toHaveLength(2);
   });
 });
 

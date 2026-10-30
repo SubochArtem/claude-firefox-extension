@@ -20,6 +20,26 @@ export type ToolResponse =
   | { type: 'tool_response'; id: string; result: ToolOutput }
   | { type: 'tool_response'; id: string; error: ToolOutput };
 
+export interface ClientHello {
+  type: 'hello';
+  nonce: string;
+}
+
+export interface HostHello {
+  type: 'hello';
+  nonce: string;
+  proof: string;
+}
+
+export interface Auth {
+  type: 'auth';
+  proof: string;
+}
+
+export interface Ready {
+  type: 'ready';
+}
+
 export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse;
 export type HostToExtensionMessage = { type: 'pong' } | ToolRequest;
 
@@ -31,7 +51,7 @@ export function errorResponse(id: string, text: string): ToolResponse {
   return { type: 'tool_response', id, error: textOutput(text) };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 

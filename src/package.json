@@ -14,7 +14,8 @@
     "lint": "web-ext lint",
     "start": "web-ext run",
     "install-host": "node scripts/install-host.mjs",
-    "uninstall-host": "node scripts/install-host.mjs --uninstall"
+    "uninstall-host": "node scripts/install-host.mjs --uninstall",
+    "e2e": "node scripts/e2e.mjs"
   },
   "devDependencies": {
     "@types/firefox-webext-browser": "^143.0.1",

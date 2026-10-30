@@ -4,6 +4,9 @@ import { executeTool } from './tools';
 const PONG_TIMEOUT_MS = 5_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
 const MAX_RETRY_DELAY_MS = 30_000;
+// A host that loses to an already running one may still connect and exit right away, so a pong alone
+// does not reset the backoff; the connection has to stay up this long after its pong.
+export const STABLE_CONNECTION_MS = 10_000;
 export const RECONNECT_ALARM = 'reconnect-native-host';
 // Firefox enforces no minimum alarm period; 0.5 min matches Chrome's floor and bounds how often a
 // suspended event page is woken to retry.
@@ -12,6 +15,7 @@ const RECONNECT_ALARM_PERIOD_MINUTES = 0.5;
 let port: browser.runtime.Port | undefined;
 let pongTimer: ReturnType<typeof setTimeout> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
+let stableTimer: ReturnType<typeof setTimeout> | undefined;
 let retryDelay = INITIAL_RETRY_DELAY_MS;
 
 export function connect(): void {
@@ -43,9 +47,15 @@ function handleMessage(source: browser.runtime.Port, message: unknown): void {
     return;
   }
   if (parsed.type === 'pong') {
-    clearTimeout(pongTimer);
-    pongTimer = undefined;
-    retryDelay = INITIAL_RETRY_DELAY_MS;
+    // Only the first pong on a port starts the stability period; pongTimer is cleared by it.
+    if (pongTimer !== undefined) {
+      clearTimeout(pongTimer);
+      pongTimer = undefined;
+      stableTimer = setTimeout(() => {
+        stableTimer = undefined;
+        retryDelay = INITIAL_RETRY_DELAY_MS;
+      }, STABLE_CONNECTION_MS);
+    }
     void browser.alarms.clear(RECONNECT_ALARM);
     console.log('Connected to native host');
     return;
@@ -60,6 +70,8 @@ function handleLoss(lost: browser.runtime.Port): void {
   port = undefined;
   clearTimeout(pongTimer);
   pongTimer = undefined;
+  clearTimeout(stableTimer);
+  stableTimer = undefined;
   scheduleReconnect();
 }
 
