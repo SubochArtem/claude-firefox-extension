@@ -21,7 +21,7 @@ const SCHEME_PREFIX = /^[a-z][a-z0-9+.-]*:/i;
 const HOST_PORT_SUFFIX = /^\d+(?:[/?#]|$)/;
 const MAX_ECHOED_LENGTH = 200;
 
-function describe(value: unknown): string {
+export function describe(value: unknown): string {
   if (value === null) return 'null';
   if (Array.isArray(value)) return 'array';
   if (typeof value === 'object') return 'object';
@@ -29,7 +29,7 @@ function describe(value: unknown): string {
   return String(value);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
@@ -47,7 +47,7 @@ function historyKeyword(input: string): 'back' | 'forward' | undefined {
   return keyword === 'back' || keyword === 'forward' ? keyword : undefined;
 }
 
-function parseTabId(value: unknown): ParseResult<number> {
+export function parseTabId(value: unknown): ParseResult<number> {
   if (value === undefined) return { ok: false, error: 'Missing required parameter tabId (integer)' };
   if (typeof value !== 'number' || !Number.isInteger(value)) {
     return { ok: false, error: `tabId must be an integer, received ${describe(value)}` };

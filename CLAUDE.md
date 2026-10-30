@@ -94,6 +94,9 @@ src/                   npm package root; every command is run from here
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
+      computer-input.ts  pure argument validation for the computer tool (screenshot action)
+      screenshot-size.ts  screenshot frame and output sizes within the image token budget
+      coordinate-frame.ts  per-tab last screenshot frame, maps frame coordinates to viewport CSS pixels
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
