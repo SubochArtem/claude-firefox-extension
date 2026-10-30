@@ -74,7 +74,7 @@ describe('MCP server process', () => {
   it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
   });
@@ -146,6 +146,44 @@ describe('MCP server process', () => {
         id: expect.stringMatching(/^\d+:1$/),
         tool: 'navigate',
         args: { tabId: 5, url: 'example.com' },
+      },
+    ]);
+  });
+
+  it('lists computer with the screenshot action and optional tabId and scale', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const computer = tools.find((tool) => tool.name === 'computer');
+    expect(computer?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['screenshot'] },
+        tabId: { type: 'integer' },
+        scale: { type: 'number', minimum: 0.1, maximum: 1 },
+      },
+      required: ['action'],
+    });
+    expect(computer?.description).toMatch(/screenshot/);
+  });
+
+  it('returns a screenshot from the extension as MCP text and image content', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startHost(runtimeDir);
+    // About the largest image the extension sends: 1,398,100 base64 characters.
+    const data = Buffer.alloc(1_048_575, 7).toString('base64');
+    const content = [
+      { type: 'text', text: 'Captured screenshot (1280x720, jpeg)' },
+      { type: 'image', data, mimeType: 'image/jpeg' },
+    ];
+    host.respondWith((request) => ({ type: 'tool_response', id: request['id'], result: { content } }));
+    const { client } = await startMcp(runtimeDir);
+    expect(await client.callTool({ name: 'computer', arguments: { action: 'screenshot', tabId: 5 } })).toEqual({ content });
+    expect(host.received).toEqual([
+      {
+        type: 'tool_request',
+        id: expect.stringMatching(/^\d+:1$/),
+        tool: 'computer',
+        args: { action: 'screenshot', tabId: 5 },
       },
     ]);
   });

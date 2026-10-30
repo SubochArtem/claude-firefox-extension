@@ -225,6 +225,16 @@ export async function runMcpServer(): Promise<void> {
     (args) => bridge.call('tabs_close', args),
   );
 
+  server.registerTool(
+    'computer',
+    {
+      description:
+        'Interact with a browser tab. For now the only action is "screenshot": capture the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. More actions will be added.',
+      inputSchema: computerInputSchema,
+    },
+    (args) => bridge.call('computer', args),
+  );
+
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the
   // process alive after Claude Code has gone away.
   let exiting = false;

@@ -103,6 +103,9 @@ export function mockBrowser() {
       async () => ({ id: 1 }),
     ),
     remove: vi.fn<(tabIds: number | number[]) => Promise<void>>(async () => {}),
+    captureTab: vi.fn<(tabId: number, options?: browser.extensionTypes.ImageDetails) => Promise<string>>(async () => {
+      throw new Error('captureTab is not mocked');
+    }),
     onRemoved: createEvent<[tabId: number, removeInfo: browser.tabs._OnRemovedRemoveInfo]>(),
   };
   const webNavigation = {
@@ -121,8 +124,18 @@ export function mockBrowser() {
       throw new Error('No window');
     }),
   };
+  const scripting = {
+    executeScript: vi.fn<
+      (injection: browser.scripting.ScriptInjection<unknown[], unknown>) => Promise<browser.scripting.InjectionResult<unknown>[]>
+    >(async () => {
+      throw new Error('executeScript is not mocked');
+    }),
+  };
+  const permissions = {
+    contains: vi.fn<(permissions: browser.permissions.AnyPermissions) => Promise<boolean>>(async () => false),
+  };
   const events = [tabs.onRemoved, ...Object.values(webNavigation)];
   const listenerCount = () => events.reduce((sum, event) => sum + event.listenerCount(), 0);
-  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation, windows });
-  return { ports, connectNative, alarms, query, tabs, webNavigation, windows, listenerCount };
+  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation, windows, scripting, permissions });
+  return { ports, connectNative, alarms, query, tabs, webNavigation, windows, scripting, permissions, listenerCount };
 }
