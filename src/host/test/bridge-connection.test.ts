@@ -116,7 +116,7 @@ describe('BridgeConnection', () => {
     const endReceived = new Promise((resolve) => ended.once('end', resolve));
     host.endConnections();
     await endReceived;
-    expect([NOT_CONNECTED_RESULT, ANSWER]).toContainEqual(await bridge.call('tabs_context', {}));
+    expect(await bridge.call('tabs_context', {})).toEqual(ANSWER);
     expect(await bridge.call('tabs_context', {})).toEqual(ANSWER);
     expect(net.sockets).toHaveLength(2);
     await expectNewConnectionSurvives(bridge, host, releaseClose);

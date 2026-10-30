@@ -1,19 +1,21 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { tmpdir, userInfo } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { delimiter, dirname, join, relative, sep } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 // @ts-expect-error web-ext ships no type declarations.
 import webExt from 'web-ext';
+import { isolatedXdgEnv, localRunSafety, pathsOutside } from './e2e-safety.mjs';
 
 // End-to-end check against a real headless Firefox: installs the native messaging host, loads the
 // built extension, drives it through the MCP server and checks the bridge from outside. It changes
 // the native host registration of the environment it runs in, so it only runs in CI unless --force.
+// A local --force run is confined to a temporary HOME and XDG_RUNTIME_DIR, see e2e-safety.mjs.
 
 const APP_NAME = 'claude-firefox-extension';
 const NATIVE_HOST_NAME = 'claude_firefox_extension';
@@ -54,6 +56,9 @@ const tempDirs = [];
 let mcpClient;
 let mcpStderr = '';
 let installed = false;
+/** Set only for a local --force run: the temporary HOME and the environment passed to the MCP server. */
+/** @type {{ home: string, env: Record<string, string> } | undefined} */
+let localRun;
 
 /** @param {string} message */
 function log(message) {
@@ -335,13 +340,12 @@ function resultText(result) {
 }
 
 // Claude Code starts MCP servers with a reduced environment, which the SDK reproduces by default. A
-// developer run with --force may point XDG_RUNTIME_DIR at a temporary directory that the reduced
-// environment would drop, so it is passed on explicitly there.
+// local --force run points XDG_RUNTIME_DIR and the XDG base directories at temporary directories
+// that the reduced environment would drop, so they are passed on explicitly there.
 function mcpEnv() {
-  const runtimeDir = process.env['XDG_RUNTIME_DIR'];
-  if (inCi || isWindows || !runtimeDir) return undefined;
-  log(`passing XDG_RUNTIME_DIR=${runtimeDir} to the MCP server (local --force run)`);
-  return { XDG_RUNTIME_DIR: runtimeDir };
+  if (!localRun) return undefined;
+  log(`passing ${Object.keys(localRun.env).join(', ')} to the MCP server (local --force run)`);
+  return localRun.env;
 }
 
 async function startMcp() {
@@ -412,6 +416,59 @@ function posixManifestPath() {
     : join(home, '.mozilla/native-messaging-hosts', `${NATIVE_HOST_NAME}.json`);
 }
 
+/**
+ * Returns the first existing symlink between `base` (exclusive) and `path`, which mkdir and writeFile
+ * would follow out of the temporary HOME.
+ * @param {string} base
+ * @param {string} path
+ */
+function symlinkOnPath(base, path) {
+  let current = base;
+  for (const part of relative(base, path).split(sep)) {
+    current = join(current, part);
+    try {
+      if (lstatSync(current).isSymbolicLink()) return current;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** @param {string | undefined} path */
+function resolvedPath(path) {
+  if (!path) return undefined;
+  try {
+    return realpathSync(path);
+  } catch {
+    return undefined;
+  }
+}
+
+// The installer and the host read HOME and the XDG variables, and a developer shell often sets
+// XDG_DATA_HOME to the real ~/.local/share, so a local run checks HOME and XDG_RUNTIME_DIR and
+// replaces every XDG base directory for itself and all its children.
+function prepareLocalRun() {
+  const realHome = userInfo().homedir;
+  const home = resolvedPath(process.env['HOME']);
+  const runtimeDir = resolvedPath(process.env['XDG_RUNTIME_DIR']);
+  const verdict = localRunSafety({
+    platform: process.platform,
+    home,
+    realHome: resolvedPath(realHome) ?? realHome,
+    runtimeDir,
+    tempRoots: [resolvedPath('/tmp') ?? '/tmp'],
+  });
+  if (!verdict.ok || !home || !runtimeDir) {
+    console.error(`e2e refuses this local --force run: ${verdict.ok ? 'HOME or XDG_RUNTIME_DIR is missing' : verdict.reason}`);
+    process.exit(2);
+  }
+  const env = { HOME: home, XDG_RUNTIME_DIR: runtimeDir, TMPDIR: '/tmp', ...isolatedXdgEnv(home) };
+  Object.assign(process.env, env);
+  for (const [key, value] of Object.entries(env)) log(`local run: ${key}=${value}`);
+  return { home, env };
+}
+
 async function main() {
   const infoPath = bridgeInfoPath();
   /** @type {string} */
@@ -438,6 +495,27 @@ async function main() {
     check(!existsSync(infoPath), `${infoPath} already exists; another native host seems to be running in this environment`);
     return `Firefox ${version ?? '(unknown version)'} at ${firefoxBinary}; bridge.json expected at ${infoPath}`;
   });
+
+  if (localRun) {
+    const { home } = localRun;
+    await step('the installer writes only inside the temporary HOME', async () => {
+      const { code, output } = await runInstaller(['--print-paths']);
+      check(code === 0, `install-host --print-paths exited ${code}:\n${output}`);
+      const line = output.split('\n').find((text) => text.startsWith('{'));
+      check(line !== undefined, `install-host --print-paths printed no paths:\n${output}`);
+      const { manifest, wrapper } = JSON.parse(line);
+      check(typeof manifest === 'string' && typeof wrapper === 'string', `unexpected install-host paths: ${line}`);
+      log(`installer will write manifest ${manifest}`);
+      log(`installer will write wrapper  ${wrapper}`);
+      const outside = pathsOutside(home, [manifest, wrapper]);
+      check(outside.length === 0, `refusing to install: ${outside.join(', ')} outside the temporary HOME ${home}`);
+      for (const path of [manifest, wrapper]) {
+        const link = symlinkOnPath(home, path);
+        check(link === undefined, `refusing to install: ${link} on the way to ${path} is a symlink`);
+      }
+      return `inside ${home}`;
+    });
+  }
 
   await step('install the native messaging host', async () => {
     const { code, output } = await runInstaller([]);
@@ -563,6 +641,7 @@ if (!inCi && !force) {
   );
   process.exit(2);
 }
+if (!inCi) localRun = prepareLocalRun();
 
 /** @type {unknown} */
 let failure;

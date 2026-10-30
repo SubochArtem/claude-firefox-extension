@@ -121,6 +121,17 @@ describe.runIf(process.platform === 'linux')('install-host', () => {
     expect(await readFile(wrapper, 'utf8')).toMatch(/^#!\/bin\/sh\n/);
   });
 
+  it('prints the paths it would write with --print-paths and writes nothing', async () => {
+    await writeFakeBuild();
+    const { stdout } = await runInstaller(['--print-paths']);
+    expect(JSON.parse(stdout)).toEqual({
+      manifest: manifestPath(),
+      wrapper: join(layout.dataHome, 'claude-firefox-extension/native-host'),
+    });
+    expect(existsSync(join(layout.home, '.mozilla'))).toBe(false);
+    expect(existsSync(layout.dataHome)).toBe(false);
+  });
+
   it('prints the quoted claude mcp add command', async () => {
     await writeFakeBuild();
     const { stdout } = await runInstaller();

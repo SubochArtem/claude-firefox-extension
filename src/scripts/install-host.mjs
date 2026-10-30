@@ -19,6 +19,12 @@ const EXTENSION_ID = 'claude-firefox-extension@localhost';
 const root = join(import.meta.dirname, '..');
 const hostEntry = join(root, 'dist/host/index.js');
 const uninstall = process.argv.includes('--uninstall');
+const printPaths = process.argv.includes('--print-paths');
+
+if (printPaths && process.platform === 'win32') {
+  console.error('--print-paths is not supported on win32');
+  process.exit(1);
+}
 
 if (process.platform === 'win32') {
   const paths = windowsInstallPaths(process.env, homedir());
@@ -67,6 +73,11 @@ const manifestPath = join(manifestDir, `${NATIVE_HOST_NAME}.json`);
 /** @param {string} value */
 function shellQuote(value) {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+if (printPaths) {
+  console.log(JSON.stringify({ manifest: manifestPath, wrapper: wrapperPath }));
+  process.exit(0);
 }
 
 if (uninstall) {

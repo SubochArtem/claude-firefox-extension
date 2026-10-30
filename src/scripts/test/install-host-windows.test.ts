@@ -769,6 +769,28 @@ describe.runIf(isWindowsCi)('Windows installer (real registry, CI only)', () => 
       expect(existsSync(join(localAppData, 'claude-firefox-extension'))).toBe(false);
     });
 
+    it('rejects --print-paths without writing files or touching the registry', async () => {
+      const keyExisted = await regQuery(KEY).then(
+        () => true,
+        () => false,
+      );
+      if (!keyExisted) deleteKeyAfterTest();
+      await mkdir(join(packageDir, 'dist', 'host'), { recursive: true });
+      await writeFile(join(packageDir, 'dist', 'host', 'index.js'), '');
+
+      await expect(runCli(['--print-paths'])).rejects.toMatchObject({
+        code: 1,
+        stdout: '',
+        stderr: expect.stringContaining('--print-paths is not supported on win32'),
+      });
+      expect(existsSync(localAppData)).toBe(false);
+      const keyExists = await regQuery(KEY).then(
+        () => true,
+        () => false,
+      );
+      expect(keyExists).toBe(keyExisted);
+    });
+
     it('installs, prints the Windows claude mcp add command and uninstalls', async ({ skip }) => {
       const realKeyExists = await regQuery(KEY).then(
         () => true,

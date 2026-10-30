@@ -386,6 +386,21 @@ describe.skipIf(process.platform === 'win32')('native host process on Unix socke
     expect(existsSync(host.socketPath)).toBe(false);
     expect(existsSync(host.bridgeInfoPath)).toBe(false);
   });
+
+  // Windows named pipes have no real half-close, so this only runs on Unix sockets.
+  it('closes an authenticated connection the client has half-closed and keeps serving the others', async () => {
+    const host = await startHost(await tempDir());
+    host.respondWith((request) => textResult(request['id'], 'ok'));
+    const other = await within(connectClient(host), 1_000, 'authenticate the other client');
+    const halfClosed = await within(connectClient(host), 1_000, 'authenticate the half-closing client');
+    halfClosed.socket.end();
+    await within(halfClosed.closed, 1_000, 'host closes the half-closed connection');
+    expect(halfClosed.lines).toEqual([]);
+
+    expect(other.isClosed()).toBe(false);
+    other.send({ type: 'tool_request', id: '1', tool: 't', args: {} });
+    expect(await within(other.nextLine(), 1_000, 'the other client gets its answer')).toEqual(textResult('1', 'ok'));
+  });
 });
 
 describe('native host handshake', () => {
@@ -598,6 +613,10 @@ describe('native host handshake', () => {
     // host refuses only while all 8 slots are taken and none is freed before the handshake timeout,
     // so once 5 are refused the other 8 hold the slots and every connection has been handled.
     await waitFor(() => expect(silent.filter((client) => client.isClosed())).toHaveLength(5), 1_000);
+    expect(silent.filter((client) => !client.isClosed())).toHaveLength(8);
+    // Far below the 2 s handshake timeout: no further connection may be refused or closed meanwhile.
+    await sleep(100);
+    expect(silent.filter((client) => client.isClosed())).toHaveLength(5);
     expect(silent.filter((client) => !client.isClosed())).toHaveLength(8);
     for (const client of silent) expect(client.lines).toEqual([]);
   }, 10_000);
