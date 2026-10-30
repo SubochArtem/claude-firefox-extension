@@ -38,6 +38,15 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => realSetTimeout(resolve, ms));
 }
 
+// Bounds an await that could otherwise hang until the test timeout, naming the step that stalled.
+export function within<T>(promise: Promise<T>, ms: number, step: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = realSetTimeout(() => reject(new Error(`${step}: not done within ${ms} ms`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 // Short paths under the literal /tmp keep the socket path far below the 107-byte sun_path limit. On
 // Windows the directory stands in for LOCALAPPDATA.
 export async function tempDir(): Promise<string> {

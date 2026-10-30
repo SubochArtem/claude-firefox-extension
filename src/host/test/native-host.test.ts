@@ -18,6 +18,7 @@ import {
   tempDir,
   textResult,
   waitFor,
+  within,
   type BridgeClient,
   type FakeExtension,
 } from './helpers';
@@ -558,33 +559,44 @@ describe('native host handshake', () => {
 
   it('frees exactly one slot per closed connection whatever closed it, so at most 8 stay unauthenticated afterwards', async () => {
     const host = await startHost(await tempDir());
+    const raw = (step: string) => within(connectRaw(host.endpoint), 1_000, step);
     // Over the cap: eight closed by the handshake timeout, one destroyed on connect without a slot.
-    const timedOut = await Promise.all(Array.from({ length: 8 }, () => connectRaw(host.endpoint)));
-    const refused = await connectRaw(host.endpoint);
-    await refused.closed;
-    await Promise.all(timedOut.map((client) => client.closed));
+    const timedOut = await within(Promise.all(Array.from({ length: 8 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 8 timed-out clients');
+    const refused = await raw('connect the refused client');
+    await within(refused.closed, 1_000, 'host closes the refused client');
+    await within(Promise.all(timedOut.map((client) => client.closed)), 3_000, 'handshake timeout closes the 8 clients');
 
-    const wrongProof = await connectRaw(host.endpoint);
+    const wrongProof = await raw('connect the wrong-proof client');
     const { clientNonce, serverNonce } = await hello(wrongProof);
     wrongProof.send({ type: 'auth', proof: proof(randomHex(), 'client', clientNonce, serverNonce) });
-    const garbage = await connectRaw(host.endpoint);
+    const garbage = await raw('connect the garbage client');
     garbage.socket.write('not json\n');
-    const oversized = await connectRaw(host.endpoint);
+    const oversized = await raw('connect the oversized client');
     oversized.socket.write('a'.repeat(5 * 1024));
-    const authenticated = await connectClient(host);
-    authenticated.socket.end();
-    await Promise.all([wrongProof, garbage, oversized, authenticated].map((client) => client.closed));
+    const authenticated = await within(connectClient(host), 1_000, 'authenticate a client');
+    // destroy, not end: Windows named pipes have no real half-close, so the host may never see an
+    // 'end'. Real MCP clients close by destroying the socket or exiting.
+    authenticated.socket.destroy();
+    const closing = { wrongProof, garbage, oversized, authenticated };
+    await within(
+      Promise.all(Object.values(closing).map((client) => client.closed)),
+      1_000,
+      'close the rejected and the authenticated clients',
+    ).catch((error: unknown) => {
+      const open = Object.entries(closing).filter(([, client]) => !client.isClosed()).map(([name]) => name);
+      throw new Error(`${(error as Error).message}; still open: ${open.join(', ')}`);
+    });
     // The host frees a slot in its close handler, which runs after the client already sees the
     // close. A full handshake needs later event loop turns on the host, so once it completes every
     // earlier close has been handled. Authenticated connections hold no slot.
-    await connectClient(host);
+    await within(connectClient(host), 1_000, 'authenticate after the closes');
 
-    const silent = await Promise.all(Array.from({ length: 12 }, () => connectRaw(host.endpoint)));
+    const silent = await within(Promise.all(Array.from({ length: 12 }, () => connectRaw(host.endpoint))), 1_000, 'connect the 12 silent clients');
     // A connect completes once the kernel queues it (Unix socket) or a pipe instance takes it
     // (Windows), before the host accepts it. The host accepts in that order and the cap is full after
     // the silent ones, so once the probe is refused every silent connection has been accepted or
     // refused.
-    const probe = await connectRaw(host.endpoint);
+    const probe = await raw('connect the probe');
     await waitFor(() => expect(probe.isClosed()).toBe(true), 1_000);
     await waitFor(() => expect(silent.filter((client) => client.isClosed())).toHaveLength(4), 1_000);
     expect(silent.filter((client) => !client.isClosed())).toHaveLength(8);
