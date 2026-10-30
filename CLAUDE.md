@@ -35,7 +35,8 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Bridge: the native host listens on a private Unix socket (Linux, macOS) or a random named pipe (Windows), publishes `bridge.json` with a per-start secret, runs a mutual HMAC handshake with every MCP server process, then multiplexes newline-delimited JSON by rewriting ids to `<clientId>:<id>`; see [Bridge protocol](docs/decisions.md#bridge-protocol) for endpoints, `bridge.json`, the Windows second-host check, limits and startup buffering/backoff.
 - tabs_create opens a background tab in the last focused normal window; tabs_close refuses the last tab of the last normal window.
 - Screenshots: one `computer` tool whose action enum grows per feature; `tabs.captureTab` without activating the tab, fitted to 1568 px / 1568 tokens, JPEG quality stepped down to fit about 1 MB; `<all_urls>` granted manually in about:addons until `feature/permissions`; see [Screenshots](docs/decisions.md#screenshots).
-- Tab scope: until `feature/permissions`, the agent may navigate and close any tab in any normal window (user decision); revisited there together with per-site permissions and the agent container.
+- Tab scope: the agent may navigate and close any tab in any normal window (user decision); with `feature/permissions` every action on a site is checked against that site's permission.
+- Permissions: per-site (host, optional subdomain wildcard) allow/deny once/always records in `storage.local`, deny wins, only http(s) URLs; agent tabs in a "Claude" container by default; see [Permissions](docs/decisions.md#permissions).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -48,7 +49,7 @@ Full text: [Threat model](docs/decisions.md#threat-model).
 - Trusted: any process of the same OS user, Administrators, SYSTEM and root.
 - Before distribution: the extension id is not reserved on AMO; fixed by `feature/amo-signing`.
 - Next major risk: prompt injection from page content; `feature/permissions` must land before `feature/accessibility-tree` and `feature/devtools-tools`.
-- Accepted for now: `navigate` and `tabs_close` work on any tab, including the user's, until `feature/permissions` scopes the agent's tabs.
+- Accepted by design: `navigate` and `tabs_close` work on any tab, including the user's; once `feature/permissions` is enforced (next pull requests of that feature), every action needs the site's permission.
 
 ## Roadmap
 
@@ -93,6 +94,11 @@ src/                   npm package root; every command is run from here
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks
+    permissions/       site permission model, not yet wired into the tools
+      actions.ts       permission action types and the mapping from tool calls
+      site.ts          http(s)-only URL to host normalization, host and wildcard matching
+      permission-model.ts  permission records, pure check (deny wins, allow-once consumed), stored data validation
+      permission-store.ts  records in storage.local under permissionStorage: load, add, revoke, clear, check
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
       computer-input.ts  pure argument validation for the computer tool (screenshot and zoom actions)
