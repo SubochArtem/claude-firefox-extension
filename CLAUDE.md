@@ -58,7 +58,7 @@ Each feature is its own branch from `main`. The feature's last commit marks it `
 - [x] `feature/extension-skeleton`: Firefox MV3 `manifest.json` and background script; the extension loads without errors.
 - [x] `feature/native-bridge`: native host + MCP server, end-to-end on the first tool `tabs_context`; install/registration of the native messaging manifest.
 - [x] `feature/tests`: Vitest setup and `npm test`; tests for the existing host (native messaging framing, JSON lines, client multiplexing, timeouts, socket directory checks, MCP server against a fake extension) and the extension tool registry / `tabs_context` with a mocked `browser.*`.
-- [ ] `feature/windows-support`: named pipe with a random name per host start plus the authenticated bridge handshake, installer writing `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` and a `.bat` wrapper, Windows paths in host and scripts.
+- [x] `feature/windows-support`: named pipe with a random name per host start plus the authenticated bridge handshake, installer writing `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` and a `.bat` wrapper, Windows paths in host and scripts.
 - [ ] `feature/amo-signing`: reserve a real extension id on AMO, sign with `web-ext sign` (unlisted), permanent install in release Firefox, verify `runtime.onStartup` reconnect. Needs the user's AMO account and API keys; timing decided separately.
 - [ ] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
 - [ ] `feature/screenshot`: screenshots via `tabs.captureVisibleTab`.
