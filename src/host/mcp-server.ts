@@ -2,6 +2,7 @@ import { createConnection, type Socket } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import * as z from 'zod/v4';
 import packageJson from '../package.json' with { type: 'json' };
 import { readBridgeInfo } from './bridge-info';
 import { authenticateToHost, HandshakeError } from './handshake';
@@ -172,6 +173,19 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: {},
     },
     (args) => bridge.call('tabs_context', args),
+  );
+
+  server.registerTool(
+    'navigate',
+    {
+      description:
+        'Navigate a tab to a URL, or go back or forward in its history. A URL without a scheme gets https://; only http and https URLs are allowed. Pass "back" or "forward" as the url to move through the tab\'s history. Waits until the page has loaded (up to 20 s) and returns the final URL, the page title and the current tabs. Get the tab id from tabs_context.',
+      inputSchema: z.object({
+        tabId: z.number().int().positive().describe('Id of the tab to navigate, from tabs_context'),
+        url: z.string().describe('URL to open, or "back" / "forward" to move through the tab history'),
+      }),
+    },
+    (args) => bridge.call('navigate', args),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the

@@ -71,12 +71,47 @@ function errorText(result: Awaited<ReturnType<typeof callTabsContext>>): string 
 }
 
 describe('MCP server process', () => {
-  it('lists tabs_context with an empty input schema', async () => {
+  it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
+  });
+
+  it('lists navigate with a required integer tabId and string url', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const navigate = tools.find((tool) => tool.name === 'navigate');
+    expect(navigate?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: { tabId: { type: 'integer' }, url: { type: 'string' } },
+      required: expect.arrayContaining(['tabId', 'url']),
+    });
+    expect(Object.keys(navigate?.inputSchema.properties ?? {}).sort()).toEqual(['tabId', 'url']);
+    const description = navigate?.description ?? '';
+    expect(description).toMatch(/https:\/\//);
+    expect(description).toMatch(/\bback\b/);
+    expect(description).toMatch(/\bforward\b/);
+    expect(description).toMatch(/tabs_context/);
+  });
+
+  it('forwards a navigate call with its arguments to the extension and back', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startHost(runtimeDir);
+    host.respondWith((request) => textResult(request['id'], 'Navigated to https://example.com/'));
+    const { client } = await startMcp(runtimeDir);
+    expect(await client.callTool({ name: 'navigate', arguments: { tabId: 5, url: 'example.com' } })).toEqual({
+      content: [{ type: 'text', text: 'Navigated to https://example.com/' }],
+    });
+    expect(host.received).toEqual([
+      {
+        type: 'tool_request',
+        id: expect.stringMatching(/^\d+:1$/),
+        tool: 'navigate',
+        args: { tabId: 5, url: 'example.com' },
+      },
+    ]);
   });
 
   it('reports the server name and version from package.json', async () => {

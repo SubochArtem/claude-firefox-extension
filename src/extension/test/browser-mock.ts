@@ -37,6 +37,45 @@ function createPort(name: string): FakePort {
 
 export type TabsQuery = (query: browser.tabs._QueryQueryInfo) => Promise<Partial<browser.tabs.Tab>[]>;
 
+export interface FakeEvent<Args extends unknown[]> {
+  addListener: (listener: (...args: Args) => void) => void;
+  removeListener: (listener: (...args: Args) => void) => void;
+  hasListener: (listener: (...args: Args) => void) => boolean;
+  emit: (...args: Args) => void;
+  listenerCount: () => number;
+}
+
+function createEvent<Args extends unknown[]>(): FakeEvent<Args> {
+  const listeners: ((...args: Args) => void)[] = [];
+  return {
+    addListener: (listener) => {
+      listeners.push(listener);
+    },
+    removeListener: (listener) => {
+      const index = listeners.indexOf(listener);
+      if (index !== -1) listeners.splice(index, 1);
+    },
+    hasListener: (listener) => listeners.includes(listener),
+    emit: (...args) => {
+      for (const listener of [...listeners]) {
+        if (listeners.includes(listener)) listener(...args);
+      }
+    },
+    listenerCount: () => listeners.length,
+  };
+}
+
+export interface NavigationDetails {
+  tabId: number;
+  frameId: number;
+  url: string;
+  documentId?: string;
+  error?: string;
+  timeStamp?: number;
+  transitionType?: string;
+  transitionQualifiers?: string[];
+}
+
 // Installs a minimal `browser` global with only what the extension code under test touches.
 export function mockBrowser() {
   const ports: FakePort[] = [];
@@ -50,6 +89,28 @@ export function mockBrowser() {
     clear: vi.fn(async () => true),
   };
   const query = vi.fn<TabsQuery>(async () => []);
-  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs: { query } });
-  return { ports, connectNative, alarms, query };
+  const tabs = {
+    query,
+    get: vi.fn<(tabId: number) => Promise<Partial<browser.tabs.Tab>>>(async (tabId) => {
+      throw new Error(`Invalid tab ID: ${tabId}`);
+    }),
+    update: vi.fn<(tabId: number, properties: browser.tabs._UpdateUpdateProperties) => Promise<Partial<browser.tabs.Tab>>>(
+      async (tabId) => ({ id: tabId }),
+    ),
+    goBack: vi.fn<(tabId: number) => Promise<void>>(async () => {}),
+    goForward: vi.fn<(tabId: number) => Promise<void>>(async () => {}),
+    onRemoved: createEvent<[tabId: number, removeInfo: browser.tabs._OnRemovedRemoveInfo]>(),
+  };
+  const webNavigation = {
+    onBeforeNavigate: createEvent<[details: NavigationDetails]>(),
+    onCommitted: createEvent<[details: NavigationDetails]>(),
+    onCompleted: createEvent<[details: NavigationDetails]>(),
+    onErrorOccurred: createEvent<[details: NavigationDetails]>(),
+    onReferenceFragmentUpdated: createEvent<[details: NavigationDetails]>(),
+    onHistoryStateUpdated: createEvent<[details: NavigationDetails]>(),
+  };
+  const events = [tabs.onRemoved, ...Object.values(webNavigation)];
+  const listenerCount = () => events.reduce((sum, event) => sum + event.listenerCount(), 0);
+  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation });
+  return { ports, connectNative, alarms, query, tabs, webNavigation, listenerCount };
 }

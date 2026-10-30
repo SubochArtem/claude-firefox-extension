@@ -173,22 +173,40 @@ describe('parseNavigateArgs', () => {
     expect(parseNavigateArgs({ tabId: 1, url })).toEqual({ ok: false, error: `Invalid URL: ${shown}` });
   });
 
-  it.each([
-    ['an unparsable', `https://exa mple.com/${'a'.repeat(10_000)}`],
-    ['a control-character', `https://example.com/${'\u0001'.repeat(10_000)}`],
-    ['a scheme-like', `${'a'.repeat(10_000)}:x`],
-  ])('caps the input echoed for %s 10 000-character url', (_label, url) => {
-    const result = parseNavigateArgs({ tabId: 1, url });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.error.length).toBeLessThan(1_300);
-    expect(result.error).toMatch(/^(Invalid URL: |Unsupported URL scheme ")/);
-    expect(result.error).toContain('…');
-  });
+  describe('echoing invalid input', () => {
+    const invalidPrefix = 'https://exa mple.com/';
+    const schemeError = (shown: string) => `Unsupported URL scheme "${shown}"; only http and https URLs are allowed`;
 
-  it('caps an invalid url at 200 characters followed by an ellipsis', () => {
-    const url = `https://exa mple.com/${'a'.repeat(10_000)}`;
-    expect(parseNavigateArgs({ tabId: 1, url })).toEqual({ ok: false, error: `Invalid URL: ${url.slice(0, 200)}…` });
+    it.each<[string, string, string]>([
+      ['200 characters in full', invalidPrefix.padEnd(200, 'a'), `Invalid URL: ${invalidPrefix.padEnd(200, 'a')}`],
+      ['201 characters cut to 200 and an ellipsis', invalidPrefix.padEnd(201, 'a'), `Invalid URL: ${invalidPrefix.padEnd(200, 'a')}…`],
+      [
+        'a 10 000-character url cut to 200 and an ellipsis',
+        `${invalidPrefix}${'a'.repeat(10_000)}`,
+        `Invalid URL: ${invalidPrefix.padEnd(200, 'a')}…`,
+      ],
+      [
+        'control characters escaped after cutting',
+        `https://example.com/${'\u0001'.repeat(10_000)}`,
+        `Invalid URL: https://example.com/${'\\u0001'.repeat(180)}…`,
+      ],
+      [
+        'a control character at position 200 escaped',
+        `${'https://example.com/'.padEnd(199, 'a')}\u001f`,
+        `Invalid URL: ${'https://example.com/'.padEnd(199, 'a')}\\u001f`,
+      ],
+      [
+        'a control character at position 201 cut off',
+        `${'https://example.com/'.padEnd(200, 'a')}\u001f`,
+        `Invalid URL: ${'https://example.com/'.padEnd(200, 'a')}…`,
+      ],
+      ['a 200-character scheme in full', `${'a'.repeat(199)}:x`, schemeError(`${'a'.repeat(199)}:`)],
+      ['a 201-character scheme cut to 200 and an ellipsis', `${'a'.repeat(200)}:x`, schemeError(`${'a'.repeat(200)}…`)],
+      ['a 10 000-character scheme cut to 200 and an ellipsis', `${'A'.repeat(10_000)}:x`, schemeError(`${'a'.repeat(200)}…`)],
+    ])('echoes %s', (_label, url, error) => {
+      expect(parseNavigateArgs({ tabId: 1, url })).toEqual({ ok: false, error });
+      expect(parseTabsCreateArgs({ url })).toEqual({ ok: false, error });
+    });
   });
 
   it.each([
