@@ -1,6 +1,8 @@
+import { resolveAgentContainer } from '../permissions/agent-container';
 import { requireSiteAccess } from '../permissions/site-access';
 import { siteForUrl } from '../permissions/site';
 import type { ContentBlock } from '../protocol';
+import { loadSettings } from '../settings';
 import { NavigationError, navigateTab, unapprovedText } from './navigate';
 import { parseTabsCloseArgs, parseTabsCreateArgs } from './navigation-input';
 import { tabsContextText } from './tabs-context';
@@ -16,15 +18,24 @@ async function withTabsContext(text: string): Promise<ContentBlock[]> {
 
 // A permission prompt is a focused popup window while it is open, so the last focused window may not be a
 // normal one; the focused normal window, or else the last one listed, is used then.
-async function lastFocusedNormalWindowId(): Promise<number> {
+// Containers do not exist in private windows, where tabs.create with a cookieStoreId fails with a generic error.
+async function lastFocusedNormalWindowId(skipPrivate: boolean): Promise<number> {
+  const usable = (window: browser.windows.Window | undefined) =>
+    window?.type === 'normal' && window.id !== undefined && !(skipPrivate && window.incognito);
   // Firefox ignores the windowTypes filter of windows.getLastFocused, so the type is checked here.
   const lastFocused = await browser.windows.getLastFocused().catch(() => undefined);
-  if (lastFocused?.type === 'normal' && lastFocused.id !== undefined) return lastFocused.id;
-  const normal = (await browser.windows.getAll({ windowTypes: ['normal'] }).catch(() => [])).filter(
+  if (usable(lastFocused) && lastFocused?.id !== undefined) return lastFocused.id;
+  const all = (await browser.windows.getAll({ windowTypes: ['normal'] }).catch(() => [])).filter(
     (window) => window.type === 'normal' && window.id !== undefined,
   );
+  const normal = all.filter(usable);
   const window = normal.find((candidate) => candidate.focused) ?? normal.at(-1);
   if (window?.id === undefined) {
+    if (all.length > 0) {
+      throw new ToolError(
+        'Failed to create a tab: container tabs cannot open in private windows, and no regular browser window is open. The user can open a regular window or switch agent tabs to the normal profile in the extension options.',
+      );
+    }
     throw new ToolError('Failed to create a tab: there is no normal browser window to open it in');
   }
   return window.id;
@@ -34,6 +45,8 @@ export async function tabsCreate(args: Record<string, unknown>): Promise<Content
   const parsed = parseTabsCreateArgs(args);
   if (!parsed.ok) throw new ToolError(`Failed to create a tab: ${parsed.error}`);
   const { url } = parsed.value;
+  // Resolved before the permission prompt, so the user is not asked about a tab that cannot be opened.
+  const cookieStoreId = (await loadSettings()).agentTabs === 'container' ? await resolveAgentContainer() : undefined;
   const approvedHost =
     url === undefined
       ? undefined
@@ -43,9 +56,14 @@ export async function tabsCreate(args: Record<string, unknown>): Promise<Content
           action: 'navigate',
           subject: `Failed to create a tab with ${url}`,
         });
-  const windowId = await lastFocusedNormalWindowId();
+  const windowId = await lastFocusedNormalWindowId(cookieStoreId !== undefined);
   // Without a url Firefox would open the new tab page; about:blank keeps the tab empty.
-  const tab = await browser.tabs.create({ windowId, url: 'about:blank', active: false });
+  const tab = await browser.tabs.create({
+    windowId,
+    url: 'about:blank',
+    active: false,
+    ...(cookieStoreId === undefined ? {} : { cookieStoreId }),
+  });
   const tabId = tab.id;
   if (tabId === undefined) throw new Error('the new tab has no id');
   if (url === undefined) return withTabsContext(`Created tab ${tabId}`);

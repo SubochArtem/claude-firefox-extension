@@ -94,11 +94,17 @@ src/                   npm package root; every command is run from here
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks
+    settings.ts        extension settings in storage.local (agent tabs: Claude container or normal profile), validated loader
+    options/           options page (about:addons): agent tabs switch, stored site permissions with Revoke
+      options.html, options.ts  the page: renders with textContent, live refresh on storage changes
+      options-view.ts  pure rows for the permission list
+      options-messages.ts  background handler for revoke requests from the options page
     permissions/       site permissions: model, storage, enforcement gate, approval prompt
       actions.ts       permission action types and the mapping from tool calls
       site.ts          http(s)-only URL to host normalization, host and wildcard matching
       permission-model.ts  permission records, pure check (deny wins, allow-once consumed), stored data validation
       permission-store.ts  records in storage.local under permissionStorage: load, add, revoke, clear, check
+      agent-container.ts  finds, adopts or creates the "Claude" container for agent tabs, one resolution at a time
       site-access.ts   gate used by the tools: requireSiteAccess (check, prompt, store), landedSite (redirect re-check)
       approval.ts      ApprovalPrompt interface (requestApproval -> decision), prompt messages and answer parsing
       popup-prompt.ts  popup window prompt: windows.create, pending requests, runtime messages, close and 120 s timeout

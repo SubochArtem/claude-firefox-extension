@@ -149,6 +149,29 @@ export function mockBrowser() {
   const permissions = {
     contains: vi.fn<(permissions: browser.permissions.AnyPermissions) => Promise<boolean>>(async () => false),
   };
+  const identities = new Map<string, browser.contextualIdentities.ContextualIdentity>();
+  let nextIdentity = 1;
+  // An in-memory container list; get rejects for an unknown cookieStoreId like Firefox does.
+  const contextualIdentities = {
+    identities,
+    get: vi.fn<(cookieStoreId: string) => Promise<browser.contextualIdentities.ContextualIdentity>>(async (cookieStoreId) => {
+      const identity = identities.get(cookieStoreId);
+      if (!identity) throw new Error(`Invalid contextual identity: ${cookieStoreId}`);
+      return structuredClone(identity);
+    }),
+    query: vi.fn<(details: browser.contextualIdentities._QueryDetails) => Promise<browser.contextualIdentities.ContextualIdentity[]>>(
+      async (details) =>
+        [...identities.values()].filter((identity) => details.name === undefined || identity.name === details.name).map((identity) => structuredClone(identity)),
+    ),
+    create: vi.fn<(details: browser.contextualIdentities._CreateDetails) => Promise<browser.contextualIdentities.ContextualIdentity>>(
+      async (details) => {
+        const cookieStoreId = `firefox-container-${nextIdentity++}`;
+        const identity = { ...details, cookieStoreId, iconUrl: '', colorCode: '' };
+        identities.set(cookieStoreId, identity);
+        return structuredClone(identity);
+      },
+    ),
+  };
   const storageData = new Map<string, unknown>();
   const storage = {
     local: {
@@ -173,7 +196,7 @@ export function mockBrowser() {
       hosts.map((host) => ({ id: `allow-${host}`, host, wildcard: false, decision: 'allow', duration: 'always', createdAt: 0 })),
     );
   };
-  vi.stubGlobal('browser', { runtime, alarms, tabs, webNavigation, windows, scripting, permissions, storage });
+  vi.stubGlobal('browser', { runtime, alarms, tabs, webNavigation, windows, scripting, permissions, storage, contextualIdentities });
   return {
     ports,
     connectNative,
@@ -186,6 +209,7 @@ export function mockBrowser() {
     scripting,
     permissions,
     storage,
+    contextualIdentities,
     listenerCount,
     allowSites,
   };

@@ -18,6 +18,15 @@ describe('manifest', () => {
     expect(manifest.permissions).toContain('storage');
   });
 
+  it('declares contextualIdentities for the agent container and cookies, which tabs.create needs for cookieStoreId', () => {
+    expect(manifest.permissions).toContain('contextualIdentities');
+    expect(manifest.permissions).toContain('cookies');
+  });
+
+  it('points the options page at the built options page', () => {
+    expect(manifest.options_ui).toEqual({ page: 'options/options.html' });
+  });
+
   it('requests access to all websites, which tabs.captureTab requires', () => {
     expect(manifest.host_permissions).toEqual(['<all_urls>']);
   });
