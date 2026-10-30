@@ -20,11 +20,11 @@ import {
   waitFor,
 } from './helpers';
 
-const HOST_TIMEOUT_MS = 35_000;
+const HOST_TIMEOUT_MS = 155_000;
 const HANDSHAKE_TIMEOUT_MS = 2_000;
 const SIGNALS = ['exit', 'SIGINT', 'SIGTERM'] as const;
 
-// The 35 s timeout cannot be waited for in a child process, so this file runs the host inside the
+// The 155 s timeout cannot be waited for in a child process, so this file runs the host inside the
 // test worker with fake stdio, a stubbed process.exit and fake setTimeout. Sockets stay real.
 async function startInProcessHost(runtimeDir: string) {
   const stdin = new PassThrough();
@@ -75,7 +75,7 @@ afterEach(() => {
 });
 
 describe('native host request timeout', () => {
-  it('answers with an error after 35 s without a response and ignores the late answer', async () => {
+  it('answers with an error after 155 s without a response and ignores the late answer', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const runtimeDir = await tempDir();

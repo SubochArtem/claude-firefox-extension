@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeTool } from '../tools';
-import { MAX_IMAGE_BASE64_LENGTH, permissionMessage, screenshotFrames } from '../tools/computer';
-import { mockBrowser } from './browser-mock';
+import { MAX_IMAGE_BASE64_LENGTH, permissionMessage, screenshotFrames, siteChangedMessage } from '../tools/computer';
+import { PROMPT_ANSWER_MESSAGE } from '../permissions/approval';
+import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
+import { handlePromptMessage } from '../permissions/popup-prompt';
+import { blockedMessage, deniedMessage } from '../permissions/site-access';
+import { EXTENSION_ID, mockBrowser } from './browser-mock';
 
 const TAB = 5;
 const OTHER_TAB = 6;
@@ -42,6 +46,7 @@ class FakeCanvas {
 
 beforeEach(() => {
   browserMock = mockBrowser();
+  browserMock.allowSites('example.com', 'other.example', 'previous.example', 'slow.example', 'hang.example', 'nonexistent.invalid', 'popup.example', '127.0.0.1');
   viewport = { width: 1280, height: 720, devicePixelRatio: 2, scrollX: 0, scrollY: 0 };
   bitmapSize = { width: 1280, height: 720 };
   bytesForQuality = () => SMALL_BYTES;
@@ -236,20 +241,38 @@ describe('computer screenshot: errors', () => {
     expect(browserMock.scripting.executeScript).not.toHaveBeenCalled();
   });
 
+  it.each(['https://addons.mozilla.org/en-US/firefox/', 'https://support.mozilla.org/'])(
+    'refuses the restricted Mozilla site %j without asking for permission',
+    async (url) => {
+      browserMock.tabs.get.mockResolvedValue({ id: OTHER_TAB, url });
+      expect(await failure({ tabId: OTHER_TAB })).toMatch(
+        new RegExp(`^Cannot take a screenshot of tab ${OTHER_TAB} .*Firefox does not let extensions access this page`),
+      );
+      expect(browserMock.windows.create).not.toHaveBeenCalled();
+      expect(browserMock.scripting.executeScript).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
-    'about:addons',
-    'about:blank',
-    'https://addons.mozilla.org/en-US/firefox/',
-    'https://support.mozilla.org/',
-    'moz-extension://0a1b2c3d/page.html',
-    'view-source:https://example.com/',
-    '',
-  ])('refuses the restricted page %j', async (url) => {
+    ['about:addons', 'about:'],
+    ['about:blank', 'about:'],
+    ['file:///home/user/page.html', 'file:'],
+    ['moz-extension://0a1b2c3d/page.html', 'moz-extension:'],
+    ['view-source:https://example.com/', 'view-source:'],
+  ])('refuses %j, which site permissions do not cover', async (url, scheme) => {
     browserMock.tabs.get.mockResolvedValue({ id: OTHER_TAB, url });
-    expect(await failure({ tabId: OTHER_TAB })).toMatch(
-      new RegExp(`^Cannot take a screenshot of tab ${OTHER_TAB} .*Firefox does not let extensions access this page`),
+    expect(await failure({ tabId: OTHER_TAB })).toBe(
+      `Cannot take a screenshot of tab ${OTHER_TAB} (${url}): Unsupported URL scheme "${scheme}"; site permissions only cover http and https pages`,
     );
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
     expect(browserMock.scripting.executeScript).not.toHaveBeenCalled();
+  });
+
+  it('refuses a tab without a url', async () => {
+    browserMock.tabs.get.mockResolvedValue({ id: OTHER_TAB, url: '' });
+    expect(await failure({ tabId: OTHER_TAB })).toBe(
+      `Cannot take a screenshot of tab ${OTHER_TAB} (): Invalid URL; site permissions only cover http and https pages`,
+    );
   });
 
   it('reports a page that refuses script injection as restricted', async () => {
@@ -406,9 +429,16 @@ describe('computer zoom', () => {
   });
 
   it('refuses a restricted page like screenshot', async () => {
-    browserMock.tabs.get.mockResolvedValue({ id: OTHER_TAB, url: 'about:addons' });
+    browserMock.tabs.get.mockResolvedValue({ id: OTHER_TAB, url: 'https://addons.mozilla.org/' });
     expect(await zoomFailure({ tabId: OTHER_TAB, region: [0, 0, 10, 10] })).toMatch(
       /^Cannot zoom into tab 6 .*Firefox does not let extensions access this page/,
+    );
+  });
+
+  it('refuses a page outside site permissions like screenshot', async () => {
+    browserMock.tabs.get.mockResolvedValue({ id: OTHER_TAB, url: 'about:addons' });
+    expect(await zoomFailure({ tabId: OTHER_TAB, region: [0, 0, 10, 10] })).toBe(
+      'Cannot zoom into tab 6 (about:addons): Unsupported URL scheme "about:"; site permissions only cover http and https pages',
     );
   });
 
@@ -431,5 +461,117 @@ describe('computer zoom', () => {
   it('names the zoom action when the tab does not exist', async () => {
     browserMock.tabs.get.mockRejectedValue(new Error('Invalid tab ID: 99'));
     expect(await zoomFailure({ tabId: 99, region: [0, 0, 10, 10] })).toMatch(/^Failed to zoom: tab 99 does not exist/);
+  });
+});
+
+describe('computer: site permissions', () => {
+  const PROMPT_WINDOW = 50;
+
+  beforeEach(() => {
+    browserMock.storage.local.data.clear();
+    browserMock.windows.create.mockResolvedValue({ id: PROMPT_WINDOW });
+  });
+
+  async function promptUrl(): Promise<string> {
+    await vi.waitFor(() => expect(browserMock.windows.create).toHaveBeenCalledTimes(1));
+    return String(browserMock.windows.create.mock.calls[0]?.[0].url);
+  }
+
+  it('asks before reading a page on a site without a decision and captures on allow once', async () => {
+    const response = run({ action: 'screenshot', tabId: OTHER_TAB });
+    const url = await promptUrl();
+    expect(browserMock.tabs.captureTab).not.toHaveBeenCalled();
+    const id = new URL(url).searchParams.get('id');
+    await handlePromptMessage({ type: PROMPT_ANSWER_MESSAGE, id, answer: 'allow_once' }, { id: EXTENSION_ID, url });
+    expect(await response).toHaveProperty('result');
+    expect(browserMock.tabs.captureTab).toHaveBeenCalledWith(OTHER_TAB, expect.anything());
+  });
+
+  it('captures nothing when the user closes the prompt window', async () => {
+    const response = run({ action: 'screenshot', tabId: OTHER_TAB });
+    await promptUrl();
+    browserMock.windows.onRemoved.emit(PROMPT_WINDOW);
+    expect(await response).toEqual({
+      type: 'tool_response',
+      id: '1:1',
+      error: { content: [{ type: 'text', text: deniedMessage('other.example') }] },
+    });
+    expect(browserMock.scripting.executeScript).not.toHaveBeenCalled();
+    expect(browserMock.tabs.captureTab).not.toHaveBeenCalled();
+  });
+
+  it('captures nothing when the tab leaves the site while the prompt is open', async () => {
+    const response = run({ action: 'screenshot', tabId: OTHER_TAB });
+    const url = await promptUrl();
+    const tab = await browserMock.tabs.get(OTHER_TAB);
+    tab.url = 'https://elsewhere.example/secret';
+    const id = new URL(url).searchParams.get('id');
+    await handlePromptMessage({ type: PROMPT_ANSWER_MESSAGE, id, answer: 'allow_once' }, { id: EXTENSION_ID, url });
+    expect(await response).toEqual({
+      type: 'tool_response',
+      id: '1:1',
+      error: { content: [{ type: 'text', text: siteChangedMessage('take a screenshot of', OTHER_TAB, 'other.example') }] },
+    });
+    expect(browserMock.scripting.executeScript).not.toHaveBeenCalled();
+    expect(browserMock.tabs.captureTab).not.toHaveBeenCalled();
+  });
+
+  it('captures a page on the approved site after a same-site navigation during the prompt', async () => {
+    const response = run({ action: 'screenshot', tabId: OTHER_TAB });
+    const url = await promptUrl();
+    const tab = await browserMock.tabs.get(OTHER_TAB);
+    tab.url = 'https://www.other.example/next';
+    const id = new URL(url).searchParams.get('id');
+    await handlePromptMessage({ type: PROMPT_ANSWER_MESSAGE, id, answer: 'allow_once' }, { id: EXTENSION_ID, url });
+    expect(await response).toHaveProperty('result');
+  });
+
+  it('captures nothing when the tab is closed while the prompt is open', async () => {
+    const response = run({ action: 'screenshot', tabId: OTHER_TAB });
+    const url = await promptUrl();
+    browserMock.tabs.get.mockRejectedValue(new Error(`Invalid tab ID: ${OTHER_TAB}`));
+    const id = new URL(url).searchParams.get('id');
+    await handlePromptMessage({ type: PROMPT_ANSWER_MESSAGE, id, answer: 'allow_once' }, { id: EXTENSION_ID, url });
+    expect(await response).toEqual({
+      type: 'tool_response',
+      id: '1:1',
+      error: { content: [{ type: 'text', text: `Cannot take a screenshot of tab ${OTHER_TAB}: the tab was closed` }] },
+    });
+    expect(browserMock.tabs.captureTab).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['screenshot', 'take a screenshot of'],
+    ['zoom', 'zoom into'],
+  ])('discards the %s image when the tab leaves the site during the capture', async (action, target) => {
+    browserMock.allowSites('example.com');
+    if (action === 'zoom') await screenshot({ tabId: TAB });
+    const frameBefore = screenshotFrames.get(TAB);
+    const tab = await browserMock.tabs.get(TAB);
+    browserMock.tabs.captureTab.mockImplementation(async () => {
+      tab.url = 'https://elsewhere.example/';
+      return `data:image/jpeg;base64,${CAPTURED}`;
+    });
+    const response = await run(action === 'zoom' ? { action, tabId: TAB, region: [0, 0, 10, 10] } : { action, tabId: TAB });
+    expect(response).toEqual({
+      type: 'tool_response',
+      id: '1:1',
+      error: { content: [{ type: 'text', text: siteChangedMessage(target, TAB, 'example.com') }] },
+    });
+    expect(screenshotFrames.get(TAB)).toEqual(frameBefore);
+  });
+
+  it.each(['screenshot', 'zoom'])('refuses %s on an always denied site without asking', async (action) => {
+    browserMock.storage.local.data.set(PERMISSION_STORAGE_KEY, [
+      { id: 'deny', host: 'example.com', wildcard: false, decision: 'deny', duration: 'always', createdAt: 0 },
+    ]);
+    const response = await run(action === 'zoom' ? { action, tabId: TAB, region: [0, 0, 10, 10] } : { action, tabId: TAB });
+    expect(response).toEqual({
+      type: 'tool_response',
+      id: '1:1',
+      error: { content: [{ type: 'text', text: blockedMessage('example.com') }] },
+    });
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
+    expect(browserMock.tabs.captureTab).not.toHaveBeenCalled();
   });
 });

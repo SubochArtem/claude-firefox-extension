@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
+import { tabsContextText } from '../tools/tabs-context';
 import { executeTool } from '../tools';
 import { mockBrowser } from './browser-mock';
 
@@ -58,6 +60,7 @@ describe('tabs_context', () => {
   }
 
   it('lists normal-window tabs and the active tab of the last focused window', async () => {
+    browserMock.allowSites('one.example', 'two.example');
     browserMock.query.mockImplementation(async (query) =>
       query.active
         ? [{ id: 12, windowId: 2, active: true }]
@@ -104,5 +107,44 @@ describe('tabs_context', () => {
   it('drops title and url when the tabs API omits them', async () => {
     browserMock.query.mockImplementation(async (query) => (query.active ? [] : [{ id: 3, windowId: 1, active: false }]));
     expect(await context()).toEqual({ tabs: [{ tabId: 3, windowId: 1, active: false }], activeTabId: null });
+  });
+
+  it('withholds the title and path of http(s) tabs on hosts without an allow, without prompting', async () => {
+    browserMock.allowSites('approved.example');
+    browserMock.storage.local.data.set(PERMISSION_STORAGE_KEY, [
+      ...(browserMock.storage.local.data.get(PERMISSION_STORAGE_KEY) as unknown[]),
+      { id: 'deny', host: 'blocked.example', wildcard: false, decision: 'deny', duration: 'always', createdAt: 0 },
+    ]);
+    browserMock.query.mockImplementation(async (query) =>
+      query.active
+        ? []
+        : [
+            { id: 1, windowId: 1, title: 'Approved', url: 'https://www.approved.example/a?b', active: true },
+            { id: 2, windowId: 1, title: 'Secret', url: 'https://unknown.example:8443/inbox?id=7', active: false },
+            { id: 3, windowId: 1, title: 'Blocked', url: 'http://blocked.example/x', active: false },
+            { id: 4, windowId: 1, title: 'New Tab', url: 'about:newtab', active: false },
+          ],
+    );
+    expect(await context()).toEqual({
+      tabs: [
+        { tabId: 1, windowId: 1, title: 'Approved', url: 'https://www.approved.example/a?b', active: true },
+        { tabId: 2, windowId: 1, url: 'https://unknown.example:8443', unapproved: true, active: false },
+        { tabId: 3, windowId: 1, url: 'http://blocked.example', unapproved: true, active: false },
+        { tabId: 4, windowId: 1, title: 'New Tab', url: 'about:newtab', active: false },
+      ],
+      activeTabId: null,
+    });
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
+    expect(browserMock.storage.local.set).not.toHaveBeenCalled();
+  });
+
+  it('treats the host approved for the current call as approved', async () => {
+    browserMock.query.mockImplementation(async (query) =>
+      query.active ? [] : [{ id: 1, windowId: 1, title: 'Once', url: 'https://once.example/page', active: false }],
+    );
+    expect(JSON.parse(await tabsContextText('once.example'))).toEqual({
+      tabs: [{ tabId: 1, windowId: 1, title: 'Once', url: 'https://once.example/page', active: false }],
+      activeTabId: null,
+    });
   });
 });

@@ -2,12 +2,12 @@ import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RUNTIME_DIR_VAR, sleep, startFakeHost, tempDir, textResult, waitFor } from './helpers';
 
-const MCP_TIMEOUT_MS = 30_000;
+const MCP_TIMEOUT_MS = 150_000;
 const HANDSHAKE_TIMEOUT_MS = 2_000;
 const AUTH_FAILED = /^Authentication with the native host failed/;
 const SIGNALS = ['exit', 'SIGINT', 'SIGTERM'] as const;
 
-// The 30 s timeout cannot be waited for in a child process, so this file runs the MCP server inside
+// The 150 s timeout cannot be waited for in a child process, so this file runs the MCP server inside
 // the test worker with fake stdio, a stubbed process.exit and fake setTimeout. Sockets stay real.
 async function startInProcessMcp(runtimeDir: string) {
   const stdin = new PassThrough();
@@ -81,7 +81,7 @@ afterEach(() => {
 });
 
 describe('MCP server request timeout', () => {
-  it('returns a timeout error after 30 s and ignores the late answer', async () => {
+  it('returns a timeout error after 150 s and ignores the late answer', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const runtimeDir = await tempDir();
@@ -99,7 +99,7 @@ describe('MCP server request timeout', () => {
       expect(await mcp.response(1)).toEqual({
         jsonrpc: '2.0',
         id: 1,
-        result: { content: [{ type: 'text', text: 'tabs_context timed out after 30 s' }], isError: true },
+        result: { content: [{ type: 'text', text: 'tabs_context timed out after 150 s' }], isError: true },
       });
 
       bridge.answer(textResult('1', 'too late'));

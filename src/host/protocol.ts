@@ -1,5 +1,9 @@
 export const NATIVE_HOST_NAME = 'claude_firefox_extension';
-export const TOOL_REQUEST_TIMEOUT_MS = 30_000;
+// Must match PROMPT_TIMEOUT_MS in extension/permissions/popup-prompt.ts.
+export const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
+// A tool call may wait for the user's answer to a permission prompt before it acts, so the agent gets
+// the tool's own answer as long as the prompt and the action after it end within this time.
+export const TOOL_REQUEST_TIMEOUT_MS = PERMISSION_PROMPT_TIMEOUT_MS + 30_000;
 
 export type ContentBlock =
   | { type: 'text'; text: string }

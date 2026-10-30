@@ -49,7 +49,7 @@ Full text: [Threat model](docs/decisions.md#threat-model).
 - Trusted: any process of the same OS user, Administrators, SYSTEM and root.
 - Before distribution: the extension id is not reserved on AMO; fixed by `feature/amo-signing`.
 - Next major risk: prompt injection from page content; `feature/permissions` must land before `feature/accessibility-tree` and `feature/devtools-tools`.
-- Accepted by design: `navigate` and `tabs_close` work on any tab, including the user's; once `feature/permissions` is enforced (next pull requests of that feature), every action needs the site's permission.
+- Accepted by design: `navigate` and `tabs_close` work on any tab, including the user's; every action on a site needs that site's permission (enforced since `feature/permissions-prompt`).
 
 ## Roadmap
 
@@ -88,17 +88,21 @@ src/                   npm package root; every command is run from here
   scripts/build.mjs    esbuild bundling of extension/ into dist/extension and host/ into dist/host
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows
-  scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e)
+  scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
   scripts/test/        installer tests (against a temp HOME), e2e safety tests
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks
-    permissions/       site permission model, not yet wired into the tools
+    permissions/       site permissions: model, storage, enforcement gate, approval prompt
       actions.ts       permission action types and the mapping from tool calls
       site.ts          http(s)-only URL to host normalization, host and wildcard matching
       permission-model.ts  permission records, pure check (deny wins, allow-once consumed), stored data validation
       permission-store.ts  records in storage.local under permissionStorage: load, add, revoke, clear, check
+      site-access.ts   gate used by the tools: requireSiteAccess (check, prompt, store), landedSite (redirect re-check)
+      approval.ts      ApprovalPrompt interface (requestApproval -> decision), prompt messages and answer parsing
+      popup-prompt.ts  popup window prompt: windows.create, pending requests, runtime messages, close and 120 s timeout
+      prompt.html, prompt.ts  the prompt page: host, action, tool, allow/deny once/always, include subdomains
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
       computer-input.ts  pure argument validation for the computer tool (screenshot and zoom actions)

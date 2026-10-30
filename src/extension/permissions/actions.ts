@@ -19,6 +19,8 @@ export function permissionActionForTool(tool: string, args: unknown): Permission
       return 'navigate';
     case 'tabs_create':
       return params.url === undefined ? undefined : 'navigate';
+    case 'tabs_close':
+      return 'navigate';
     case 'computer':
       return params.action === 'screenshot' || params.action === 'zoom' ? 'read_page_content' : undefined;
     default:

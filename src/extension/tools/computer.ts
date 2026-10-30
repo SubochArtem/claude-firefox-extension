@@ -1,3 +1,5 @@
+import { siteForUrl } from '../permissions/site';
+import { requireSiteAccess } from '../permissions/site-access';
 import type { ContentBlock } from '../protocol';
 import { parseComputerArgs, type ScreenshotArgs, type ZoomArgs } from './computer-input';
 import { CoordinateFrames } from './coordinate-frame';
@@ -22,6 +24,10 @@ export function permissionMessage(verb: string): string {
   return `Failed to ${verb}: the extension is not allowed to access websites. Open about:addons, choose Claude Firefox Extension, open its Permissions tab and enable "Access your data for all websites", then try again.`;
 }
 
+export function siteChangedMessage(target: string, tabId: number, host: string): string {
+  return `Cannot ${target} tab ${tabId}: the tab navigated away from ${host} before the capture, so nothing was captured. Try again; a page on another site needs its own permission.`;
+}
+
 // Firefox's default extensions.webextensions.restrictedDomains: no extension may script or capture them.
 const RESTRICTED_DOMAINS = new Set([
   'accounts-static.cdn.mozilla.net',
@@ -37,7 +43,6 @@ const RESTRICTED_DOMAINS = new Set([
   'support.mozilla.org',
   'sync.services.mozilla.com',
 ]);
-const CAPTURABLE_PROTOCOLS = new Set(['http:', 'https:', 'file:']);
 
 export const screenshotFrames = new CoordinateFrames();
 
@@ -76,14 +81,8 @@ function restrictedPageMessage(label: ActionLabel, tabId: number, url: string): 
   return `Cannot ${label.target} tab ${tabId} (${url}): Firefox does not let extensions access this page (about: and other browser pages, addons.mozilla.org and other Mozilla sites, other extensions' pages, reader view, the PDF viewer), or the page failed to load. Navigate the tab to a regular website first.`;
 }
 
-function isRestrictedUrl(url: string): boolean {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return true;
-  }
-  return !CAPTURABLE_PROTOCOLS.has(parsed.protocol) || RESTRICTED_DOMAINS.has(parsed.hostname);
+function isRestrictedDomain(url: string): boolean {
+  return URL.canParse(url) && RESTRICTED_DOMAINS.has(new URL(url).hostname);
 }
 
 // Firefox rejects executeScript with "Missing host permission for the tab[, or any frames]" and
@@ -200,17 +199,38 @@ async function encodeJpeg(dataUrl: string, output: Size): Promise<string> {
   }
 }
 
-async function capturableTab(
-  tabId: number | undefined,
-  label: ActionLabel,
-): Promise<{ tabId: number; url: string }> {
+interface CapturableTab {
+  tabId: number;
+  url: string;
+  host: string;
+}
+
+// The tab may navigate while the permission prompt is open or while the capture runs, so the host is
+// checked again after both; an image of a page on another site is never returned.
+async function requireSameSite(label: ActionLabel, tabId: number, host: string): Promise<string> {
+  const tab = await browser.tabs.get(tabId).catch(() => undefined);
+  if (!tab) throw new ToolError(`Cannot ${label.target} tab ${tabId}: the tab was closed`);
+  const url = tab.url ?? '';
+  const site = siteForUrl(url);
+  if (!site.ok || site.host !== host) throw new ToolError(siteChangedMessage(label.target, tabId, host));
+  return url;
+}
+
+async function capturableTab(tabId: number | undefined, label: ActionLabel): Promise<CapturableTab> {
   const tab = await resolveTab(tabId, label);
   const url = tab.url ?? '';
-  if (isRestrictedUrl(url)) throw new ToolError(restrictedPageMessage(label, tab.id, url));
+  // Checked before the site permission, so the user is not asked about a page that cannot be captured.
+  if (isRestrictedDomain(url)) throw new ToolError(restrictedPageMessage(label, tab.id, url));
   if (!(await browser.permissions.contains({ origins: ['<all_urls>'] }))) {
     throw new ToolError(permissionMessage(label.verb));
   }
-  return { tabId: tab.id, url };
+  const host = await requireSiteAccess({
+    url,
+    tool: 'computer',
+    action: 'read_page_content',
+    subject: `Cannot ${label.target} tab ${tab.id} (${url})`,
+  });
+  return { tabId: tab.id, url: await requireSameSite(label, tab.id, host), host };
 }
 
 async function capture(
@@ -235,7 +255,7 @@ async function capture(
 }
 
 async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
-  const { tabId, url } = await capturableTab(args.tabId, SCREENSHOT_LABEL);
+  const { tabId, url, host } = await capturableTab(args.tabId, SCREENSHOT_LABEL);
   const viewport = await readViewport(SCREENSHOT_LABEL, tabId, url);
   const scale = args.scale ?? 1;
   const { frame, output } = screenshotSize(viewport, scale);
@@ -243,6 +263,7 @@ async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
   // tabs.captureTab renders the tab without activating it, unlike captureVisibleTab. Its scale is
   // in image pixels per CSS pixel, so this renders the viewport at about the output size.
   const base64 = await capture(SCREENSHOT_LABEL, tabId, url, { scale: output.width / viewport.width }, output);
+  await requireSameSite(SCREENSHOT_LABEL, tabId, host);
 
   screenshotFrames.record(tabId, { width: viewport.width, height: viewport.height }, frame);
   if (!browser.tabs.onRemoved.hasListener(forgetFrame)) browser.tabs.onRemoved.addListener(forgetFrame);
@@ -259,7 +280,7 @@ async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
 
 // Zoom keeps the last screenshot's coordinate frame, so later actions still use its coordinates.
 async function zoom(args: ZoomArgs): Promise<ContentBlock[]> {
-  const { tabId, url } = await capturableTab(args.tabId, ZOOM_LABEL);
+  const { tabId, url, host } = await capturableTab(args.tabId, ZOOM_LABEL);
   const { frame } = screenshotFrames.require(tabId);
   const viewport = await readViewport(ZOOM_LABEL, tabId, url);
   const rect = screenshotFrames.regionToViewport(tabId, args.region, viewport);
@@ -276,6 +297,7 @@ async function zoom(args: ZoomArgs): Promise<ContentBlock[]> {
     },
     output,
   );
+  await requireSameSite(ZOOM_LABEL, tabId, host);
 
   return [
     {

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeTool } from '../tools';
-import { mockBrowser } from './browser-mock';
+import { PROMPT_ANSWER_MESSAGE } from '../permissions/approval';
+import { handlePromptMessage } from '../permissions/popup-prompt';
+import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
+import { blockedMessage, deniedMessage } from '../permissions/site-access';
+import { EXTENSION_ID, mockBrowser } from './browser-mock';
 
 const WINDOW = 1;
 const POPUP_WINDOW = 2;
@@ -11,6 +15,8 @@ const TARGET = 'https://example.com/';
 const TARGET_DOC = 'doc-target';
 const ABORTED = 'Error code 2152398850';
 const UNKNOWN_HOST = 'Error code 2152398878';
+const PROMPT_WINDOW = 50;
+const SECOND_WINDOW = 3;
 
 let browserMock: ReturnType<typeof mockBrowser>;
 let openTabs: Map<number, Partial<browser.tabs.Tab>>;
@@ -36,6 +42,7 @@ function useTabModel() {
     return tab;
   });
   browserMock.windows.getLastFocused.mockResolvedValue({ id: WINDOW, type: 'normal' });
+  browserMock.windows.getAll.mockResolvedValue([{ id: WINDOW, type: 'normal', focused: true }]);
   browserMock.windows.get.mockImplementation(async (windowId) => {
     if (windowId === WINDOW) return { id: WINDOW, type: 'normal' };
     if (windowId === POPUP_WINDOW) return { id: POPUP_WINDOW, type: 'popup' };
@@ -63,6 +70,7 @@ function tabsContext() {
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] });
   browserMock = mockBrowser();
+  browserMock.allowSites('example.com', 'other.example', 'previous.example', 'slow.example', 'hang.example', 'nonexistent.invalid', 'popup.example', '127.0.0.1');
   useTabModel();
 });
 
@@ -101,6 +109,12 @@ function success(text: string) {
 
 function failure(text: string) {
   return { type: 'tool_response', id: '1:7', error: { content: [{ type: 'text', text }] } };
+}
+
+function denySite(host: string) {
+  browserMock.storage.local.data.set(PERMISSION_STORAGE_KEY, [
+    { id: 'deny', host, wildcard: false, decision: 'deny', duration: 'always', createdAt: 0 },
+  ]);
 }
 
 function emitLoad(tabId: number, url: string) {
@@ -209,12 +223,25 @@ describe('tabs_create', () => {
     expect(state.value).toEqual(failure(`Tab ${NEW_TAB} was created, but the load failed: tab ${NEW_TAB} was closed`));
   });
 
+  it.each<[string, Partial<browser.windows.Window>[], number]>([
+    ['the focused normal window', [{ id: WINDOW, type: 'normal', focused: false }, { id: SECOND_WINDOW, type: 'normal', focused: true }], SECOND_WINDOW],
+    ['the last listed normal window', [{ id: SECOND_WINDOW, type: 'normal', focused: false }, { id: WINDOW, type: 'normal', focused: false }], WINDOW],
+  ])('opens the tab in %s when a popup window is focused', async (_label, windows, expected) => {
+    browserMock.windows.getLastFocused.mockResolvedValue({ id: POPUP_WINDOW, type: 'popup' });
+    browserMock.windows.getAll.mockResolvedValue(windows);
+    await run('tabs_create', {});
+    expect(browserMock.windows.getAll).toHaveBeenCalledWith({ windowTypes: ['normal'] });
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: expected, url: 'about:blank', active: false });
+  });
+
   it.each<[string, () => void]>([
-    ['the last focused window is not a normal window', () => {
+    ['the last focused window is a popup and there is no normal window', () => {
       browserMock.windows.getLastFocused.mockResolvedValue({ id: POPUP_WINDOW, type: 'popup' });
+      browserMock.windows.getAll.mockResolvedValue([]);
     }],
     ['there is no window', () => {
       browserMock.windows.getLastFocused.mockRejectedValue(new Error('No window'));
+      browserMock.windows.getAll.mockResolvedValue([]);
     }],
   ])('fails without creating a tab when %s', async (_label, setup) => {
     setup();
@@ -323,5 +350,100 @@ describe('tabs_close', () => {
       id: '1:8',
       error: { content: [{ type: 'text', text: `Failed to navigate: tab ${OTHER_TAB} was closed` }] },
     });
+  });
+});
+
+describe('site permissions', () => {
+  beforeEach(() => {
+    browserMock.windows.create.mockResolvedValue({ id: PROMPT_WINDOW });
+  });
+
+  it('tabs_create refuses an always denied site without creating a tab', async () => {
+    denySite('example.com');
+    const state = await run('tabs_create', { url: TARGET });
+    expect(state.value).toEqual(failure(blockedMessage('example.com')));
+    expect(browserMock.tabs.create).not.toHaveBeenCalled();
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
+  });
+
+  it('tabs_create asks for a site without a decision and creates no tab when the prompt is closed', async () => {
+    const state = await run('tabs_create', { url: 'https://new.example/' });
+    expect(browserMock.windows.create).toHaveBeenCalledTimes(1);
+    expect(state.settled).toBe(false);
+    browserMock.windows.onRemoved.emit(PROMPT_WINDOW);
+    await flush();
+    expect(state.value).toEqual(failure(deniedMessage('new.example')));
+    expect(browserMock.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('tabs_create resolves the window after approval, while its prompt popup is focused', async () => {
+    const url = 'https://new.example/';
+    const state = await run('tabs_create', { url });
+    expect(browserMock.windows.create).toHaveBeenCalledTimes(1);
+    expect(browserMock.windows.getLastFocused).not.toHaveBeenCalled();
+    browserMock.windows.getLastFocused.mockResolvedValue({ id: PROMPT_WINDOW, type: 'popup' });
+    browserMock.windows.getAll.mockResolvedValue([{ id: WINDOW, type: 'normal', focused: false }]);
+    const promptUrl = String(browserMock.windows.create.mock.calls.at(-1)?.[0].url);
+    const id = new URL(promptUrl).searchParams.get('id');
+    await handlePromptMessage({ type: PROMPT_ANSWER_MESSAGE, id, answer: 'allow_once' }, { id: EXTENSION_ID, url: promptUrl });
+    await flush();
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false });
+    openTabs.set(NEW_TAB, { ...openTabs.get(NEW_TAB), url, title: 'New' });
+    emitLoad(NEW_TAB, url);
+    await flush();
+    expect(state.value).toEqual(success(expect.stringMatching(/^Created tab 9 and navigated to https:\/\/new\.example\/\nTitle: New/)));
+  });
+
+  it('tabs_create withholds the page a redirect lands on when its host is not approved', async () => {
+    const landing = 'https://evil.example/';
+    const state = await run('tabs_create', { url: TARGET }, () => {
+      openTabs.set(NEW_TAB, { ...openTabs.get(NEW_TAB), url: landing, title: 'Evil' });
+      emitLoad(NEW_TAB, landing);
+    });
+    expect(state.value).toEqual(
+      success(
+        `Created tab ${NEW_TAB}. Tab ${NEW_TAB} landed on an unapproved host: evil.example. Its title and content are withheld; the next action on this tab will ask the user for permission.`,
+      ),
+    );
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['about:blank', 'about:newtab', undefined])('tabs_close closes a tab on %j without a permission check', async (url) => {
+    browserMock.storage.local.data.clear();
+    openTabs.set(OTHER_TAB, { ...openTabs.get(OTHER_TAB), url });
+    browserMock.tabs.remove.mockImplementation(async () => closeTab(OTHER_TAB));
+    const state = await run('tabs_close', { tabId: OTHER_TAB });
+    // No stored decision covers previous.example any more, so its tab is listed by origin only.
+    const context = JSON.stringify({
+      tabs: [{ tabId: TAB, windowId: WINDOW, url: 'https://previous.example', unapproved: true, active: true }],
+      activeTabId: TAB,
+    });
+    expect(state.value).toEqual(success(`Closed tab ${OTHER_TAB}\n\nTabs context: ${context}`));
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
+  });
+
+  it('tabs_close refuses a tab on an always denied site', async () => {
+    denySite('other.example');
+    const state = await run('tabs_close', { tabId: OTHER_TAB });
+    expect(state.value).toEqual(failure(blockedMessage('other.example')));
+    expect(browserMock.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('tabs_close asks for a site without a decision and keeps the tab when denied', async () => {
+    browserMock.storage.local.data.clear();
+    const state = await run('tabs_close', { tabId: OTHER_TAB });
+    expect(browserMock.windows.create).toHaveBeenCalledTimes(1);
+    browserMock.windows.onRemoved.emit(PROMPT_WINDOW);
+    await flush();
+    expect(state.value).toEqual(failure(deniedMessage('other.example')));
+    expect(browserMock.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('tabs_close does not ask about the last tab, which it refuses anyway', async () => {
+    browserMock.storage.local.data.clear();
+    openTabs.delete(TAB);
+    const state = await run('tabs_close', { tabId: OTHER_TAB });
+    expect(state.value).toEqual(failure(expect.stringMatching(/^Refusing to close tab 6: it is the last tab/)));
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
   });
 });
