@@ -134,8 +134,23 @@ export function mockBrowser() {
   const permissions = {
     contains: vi.fn<(permissions: browser.permissions.AnyPermissions) => Promise<boolean>>(async () => false),
   };
+  const storageData = new Map<string, unknown>();
+  const storage = {
+    local: {
+      data: storageData,
+      get: vi.fn<(key: string) => Promise<Record<string, unknown>>>(async (key) =>
+        storageData.has(key) ? { [key]: structuredClone(storageData.get(key)) } : {},
+      ),
+      set: vi.fn<(items: Record<string, unknown>) => Promise<void>>(async (items) => {
+        for (const [key, value] of Object.entries(items)) storageData.set(key, structuredClone(value));
+      }),
+      remove: vi.fn<(key: string) => Promise<void>>(async (key) => {
+        storageData.delete(key);
+      }),
+    },
+  };
   const events = [tabs.onRemoved, ...Object.values(webNavigation)];
   const listenerCount = () => events.reduce((sum, event) => sum + event.listenerCount(), 0);
-  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation, windows, scripting, permissions });
-  return { ports, connectNative, alarms, query, tabs, webNavigation, windows, scripting, permissions, listenerCount };
+  vi.stubGlobal('browser', { runtime: { connectNative }, alarms, tabs, webNavigation, windows, scripting, permissions, storage });
+  return { ports, connectNative, alarms, query, tabs, webNavigation, windows, scripting, permissions, storage, listenerCount };
 }
