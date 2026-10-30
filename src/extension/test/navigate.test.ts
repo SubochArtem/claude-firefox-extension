@@ -172,6 +172,59 @@ describe('waitForNavigation', () => {
     expect(state.value).toEqual({ status: 'loaded', url: TARGET });
   });
 
+  // Recorded in Firefox 159 for about 1 load in 25 in a tab created with about:blank: after the commit
+  // Firefox fires another onBeforeNavigate for the same url and an NS_BINDING_ABORTED for the committed
+  // document, then completes that document.
+  it('resolves loaded when a repeated onBeforeNavigate and an abort follow the commit', async () => {
+    const state = await startWait();
+    beforeNavigate(TARGET);
+    committed(TARGET, TARGET_DOC);
+    beforeNavigate(TARGET);
+    failed(TARGET, ABORTED, { documentId: TARGET_DOC });
+    await flush();
+    expect(state.settled).toBe(false);
+    completed(TARGET, TARGET_DOC);
+    await flush();
+    expect(state.value).toEqual<NavigationOutcome>({ status: 'loaded', url: TARGET });
+    expectCleanedUp();
+  });
+
+  it('resolves loaded when the repeated onBeforeNavigate comes before the commit and its abort after it', async () => {
+    const state = await startWait();
+    beforeNavigate(TARGET);
+    beforeNavigate(TARGET);
+    committed(TARGET, TARGET_DOC);
+    failed(TARGET, ABORTED, { documentId: TARGET_DOC });
+    await flush();
+    expect(state.settled).toBe(false);
+    completed(TARGET, TARGET_DOC);
+    await flush();
+    expect(state.value).toEqual<NavigationOutcome>({ status: 'loaded', url: TARGET });
+    expectCleanedUp();
+  });
+
+  it('reports an abort of the committed document that no restart explains', async () => {
+    const state = await startWait();
+    beforeNavigate(TARGET);
+    failed(TARGET, ABORTED);
+    beforeNavigate(TARGET);
+    committed(TARGET, TARGET_DOC);
+    failed(TARGET, ABORTED, { documentId: TARGET_DOC });
+    await flush();
+    expect(state.value).toEqual<NavigationOutcome>({ status: 'error', url: TARGET, error: ABORTED });
+    expectCleanedUp();
+  });
+
+  it('reports still-loading, not no-response, when the document committed before a repeated onBeforeNavigate never completes', async () => {
+    const state = await startWait();
+    beforeNavigate(TARGET);
+    committed(TARGET, TARGET_DOC);
+    beforeNavigate(TARGET);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(state.value).toEqual<NavigationOutcome>({ status: 'still-loading', url: TARGET });
+    expectCleanedUp();
+  });
+
   describe('while the tab is still loading the previous page', () => {
     it('ignores a commit and a completion of the previous page that arrive before the new navigation starts', async () => {
       const state = await startWait();
@@ -214,6 +267,29 @@ describe('waitForNavigation', () => {
       await flush();
       expect(state.value).toEqual({ status: 'loaded', url: TARGET });
     });
+  });
+
+  it('ignores the late about:blank load of a new tab while waiting for a url', async () => {
+    const state = await startWait();
+    beforeNavigate('about:blank');
+    committed('about:blank', 'doc-blank');
+    completed('about:blank', 'doc-blank');
+    await flush();
+    expect(state.settled).toBe(false);
+    normalLoad();
+    await flush();
+    expect(state.value).toEqual<NavigationOutcome>({ status: 'loaded', url: TARGET });
+    expectCleanedUp();
+  });
+
+  it('still follows a history step that lands on about:blank', async () => {
+    const state = await startWait({ kind: 'back' });
+    beforeNavigate('about:blank');
+    committed('about:blank', 'doc-blank');
+    completed('about:blank', 'doc-blank');
+    await flush();
+    expect(state.value).toEqual<NavigationOutcome>({ status: 'loaded', url: 'about:blank' });
+    expectCleanedUp();
   });
 
   it('ignores subframes and other tabs', async () => {
@@ -288,6 +364,17 @@ describe('waitForNavigation', () => {
     it('reports a download: the target completes without a commit', async () => {
       const download = 'https://example.com/file.zip';
       const state = await startWait({ kind: 'url', url: download });
+      beforeNavigate(download);
+      completed(download, PREVIOUS_DOC);
+      await flush();
+      expect(state.value).toEqual({ status: 'download', url: download });
+      expectCleanedUp();
+    });
+
+    it('reports a download after a repeated onBeforeNavigate when the target completes without a commit', async () => {
+      const download = 'https://example.com/file.zip';
+      const state = await startWait({ kind: 'url', url: download });
+      beforeNavigate(download);
       beforeNavigate(download);
       completed(download, PREVIOUS_DOC);
       await flush();

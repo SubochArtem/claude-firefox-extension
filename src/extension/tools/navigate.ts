@@ -59,6 +59,10 @@ function isSameDocument(committed: FrameDetails, completed: FrameDetails): boole
 // committed after it. An onCompleted for the requested url without a commit is a download; a download
 // behind a redirect completes with another url and ends in no-response. A newer wait in the same tab
 // ends this one as superseded, because the events of both navigations cannot be told apart.
+// Firefox starts a load over with a second onBeforeNavigate and reports the superseded load with one
+// NS_BINDING_ABORTED. These events race the commit: the restart and its abort can follow onCommitted,
+// and the abort then carries the documentId of the committed document. So every restart excuses one
+// abort, and a document committed for the url its navigation started with survives the restart.
 export function waitForNavigation(
   tabId: number,
   target: NavigateTarget,
@@ -68,29 +72,49 @@ export function waitForNavigation(
     let settled = false;
     let startedUrl: string | undefined;
     let committed: FrameDetails | undefined;
+    const startedCommits: FrameDetails[] = [];
+    let restarts = 0;
+    let aborts = 0;
     let startTimer: ReturnType<typeof setTimeout> | undefined;
 
-    const isMainFrame = (details: FrameDetails) => details.tabId === tabId && details.frameId === 0;
+    // A tab created with about:blank reports that load only after tabs.create has resolved, so its
+    // events can reach a wait for an http(s) url that started right after; no such url ends on about:blank.
+    const isMainFrame = (details: FrameDetails) =>
+      details.tabId === tabId &&
+      details.frameId === 0 &&
+      !(target.kind === 'url' && details.url === 'about:blank');
 
     const onBeforeNavigate = (details: FrameDetails) => {
       if (!isMainFrame(details)) return;
+      if (startedUrl !== undefined) restarts++;
       startedUrl = details.url;
       committed = undefined;
     };
     const onCommitted = (details: FrameDetails) => {
-      if (isMainFrame(details) && startedUrl !== undefined) committed = details;
+      if (!isMainFrame(details) || startedUrl === undefined) return;
+      committed = details;
+      if (details.url === startedUrl) startedCommits.push(details);
     };
     const onCompleted = (details: FrameDetails) => {
       if (!isMainFrame(details) || startedUrl === undefined) return;
-      if (committed) {
-        if (isSameDocument(committed, details)) finish({ status: 'loaded', url: details.url });
-      } else if (details.url === startedUrl) {
+      if (
+        (committed && isSameDocument(committed, details)) ||
+        startedCommits.some((commit) => isSameDocument(commit, details))
+      ) {
+        finish({ status: 'loaded', url: details.url });
+      } else if (!committed && details.url === startedUrl) {
         finish({ status: 'download', url: details.url });
       }
     };
     const onErrorOccurred = (details: FrameDetails & { error?: string }) => {
       if (!isMainFrame(details) || startedUrl === undefined) return;
-      if (details.error === NS_BINDING_ABORTED && !(committed && isSameDocument(committed, details))) return;
+      if (details.error === NS_BINDING_ABORTED) {
+        // Deliberate trade-off to tolerate Firefox's varying event order: after a restart a genuine
+        // abort arriving before the stale one is swallowed, and the wait ends in still-loading or
+        // no-response at the timeout instead of an error.
+        aborts++;
+        if (aborts <= restarts || !(committed && isSameDocument(committed, details))) return;
+      }
       finish({ status: 'error', url: details.url, error: details.error });
     };
     const onSameDocument = (details: SameDocumentDetails) => {
@@ -121,7 +145,8 @@ export function waitForNavigation(
     tabs.onRemoved.addListener(onRemoved);
 
     const overallTimer = setTimeout(() => {
-      if (committed) finish({ status: 'still-loading', url: committed.url });
+      const lastCommit = committed ?? startedCommits[startedCommits.length - 1];
+      if (lastCommit) finish({ status: 'still-loading', url: lastCommit.url });
       else if (startedUrl !== undefined) finish({ status: 'no-response', url: startedUrl });
       else finish({ status: 'not-started' });
     }, NAVIGATION_TIMEOUT_MS);
@@ -187,11 +212,28 @@ function describeNavigationError(error: string | undefined): string {
   return `${description} (${name}, ${error})`;
 }
 
+// Carries the reason apart from the navigate wording, so tabs_create can report the same failure
+// in its own words.
+export class NavigationError extends ToolError {
+  constructor(
+    readonly detail: string,
+    readonly url?: string,
+    readonly tabClosed = false,
+  ) {
+    super(url === undefined ? `Failed to navigate: ${detail}` : `Failed to navigate to ${url}: ${detail}`);
+  }
+}
+
+export interface NavigationTexts {
+  headline: (url: string) => string;
+  download: (url: string, stayUrl: string | undefined) => string;
+}
+
 async function currentTab(tabId: number): Promise<browser.tabs.Tab> {
   try {
     return await browser.tabs.get(tabId);
   } catch {
-    throw new ToolError(`Failed to navigate: tab ${tabId} was closed`);
+    throw new NavigationError(`tab ${tabId} was closed`, undefined, true);
   }
 }
 
@@ -203,6 +245,60 @@ async function report(tabId: number, headline: string, note?: string): Promise<C
   return [{ type: 'text', text: `${lines.join('\n')}\n\nTabs context: ${await tabsContextText()}` }];
 }
 
+// Starts the navigation in an existing tab and turns its outcome into the tool result; every expected
+// failure is thrown as a NavigationError.
+export async function navigateTab(
+  tabId: number,
+  target: NavigateTarget,
+  initialTab: browser.tabs.Tab,
+  texts: NavigationTexts,
+): Promise<ContentBlock[]> {
+  let outcome: NavigationOutcome;
+  try {
+    outcome = await waitForNavigation(tabId, target, () => startNavigation(tabId, target));
+  } catch (error) {
+    throw new NavigationError(error instanceof Error ? error.message : String(error));
+  }
+
+  switch (outcome.status) {
+    case 'loaded':
+    case 'same-document':
+      return report(tabId, texts.headline(outcome.url));
+    case 'still-loading':
+      return report(
+        tabId,
+        texts.headline(outcome.url),
+        `The page was still loading after ${NAVIGATION_TIMEOUT_MS / 1000} s; its content may be incomplete.`,
+      );
+    case 'download': {
+      const tab = await browser.tabs.get(tabId).catch(() => initialTab);
+      return [{ type: 'text', text: texts.download(outcome.url, tab.url) }];
+    }
+    case 'error':
+      throw new NavigationError(describeNavigationError(outcome.error), outcome.url);
+    case 'no-response':
+      throw new NavigationError(`${outcome.url} did not respond within ${NAVIGATION_TIMEOUT_MS / 1000} s`);
+    case 'closed':
+      throw new NavigationError(`tab ${tabId} was closed`, undefined, true);
+    case 'superseded':
+      throw new NavigationError(
+        `superseded by another navigate call in tab ${tabId} before this navigation finished`,
+      );
+    case 'not-started': {
+      const tab = await currentTab(tabId);
+      if (target.kind === 'url') {
+        // Firefox starts nothing when the tab already shows exactly this url, fragment included.
+        if (tab.url === target.url) return report(tabId, `Tab ${tabId} is already on ${target.url}`);
+        throw new NavigationError(
+          `the navigation to ${target.url} did not start within ${NAVIGATION_START_TIMEOUT_MS / 1000} s`,
+        );
+      }
+      const entry = target.kind === 'back' ? 'previous' : 'next';
+      throw new NavigationError(`tab ${tabId} has no ${entry} page in its history; it stays on ${tab.url}`);
+    }
+  }
+}
+
 export async function navigate(args: Record<string, unknown>): Promise<ContentBlock[]> {
   const parsed = parseNavigateArgs(args);
   if (!parsed.ok) throw new ToolError(`Failed to navigate: ${parsed.error}`);
@@ -210,50 +306,9 @@ export async function navigate(args: Record<string, unknown>): Promise<ContentBl
   const initialTab = await browser.tabs.get(tabId).catch(() => undefined);
   if (!initialTab) throw new ToolError(`Failed to navigate: tab ${tabId} does not exist`);
 
-  let outcome: NavigationOutcome;
-  try {
-    outcome = await waitForNavigation(tabId, target, () => startNavigation(tabId, target));
-  } catch (error) {
-    throw new ToolError(`Failed to navigate: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
   const prefix = HISTORY_PREFIX[target.kind];
-  switch (outcome.status) {
-    case 'loaded':
-    case 'same-document':
-      return report(tabId, `${prefix} ${outcome.url}`);
-    case 'still-loading':
-      return report(
-        tabId,
-        `${prefix} ${outcome.url}`,
-        `The page was still loading after ${NAVIGATION_TIMEOUT_MS / 1000} s; its content may be incomplete.`,
-      );
-    case 'download': {
-      const tab = await browser.tabs.get(tabId).catch(() => initialTab);
-      const text = `${outcome.url} started a download instead of opening a page; tab ${tabId} stays on ${tab.url}`;
-      return [{ type: 'text', text }];
-    }
-    case 'error':
-      throw new ToolError(`Failed to navigate to ${outcome.url}: ${describeNavigationError(outcome.error)}`);
-    case 'no-response':
-      throw new ToolError(`Failed to navigate: ${outcome.url} did not respond within ${NAVIGATION_TIMEOUT_MS / 1000} s`);
-    case 'closed':
-      throw new ToolError(`Failed to navigate: tab ${tabId} was closed`);
-    case 'superseded':
-      throw new ToolError(
-        `Failed to navigate: superseded by another navigate call in tab ${tabId} before this navigation finished`,
-      );
-    case 'not-started': {
-      const tab = await currentTab(tabId);
-      if (target.kind === 'url') {
-        // Firefox starts nothing when the tab already shows exactly this url, fragment included.
-        if (tab.url === target.url) return report(tabId, `Tab ${tabId} is already on ${target.url}`);
-        throw new ToolError(
-          `Failed to navigate: the navigation to ${target.url} did not start within ${NAVIGATION_START_TIMEOUT_MS / 1000} s`,
-        );
-      }
-      const entry = target.kind === 'back' ? 'previous' : 'next';
-      throw new ToolError(`Failed to navigate: tab ${tabId} has no ${entry} page in its history; it stays on ${tab.url}`);
-    }
-  }
+  return navigateTab(tabId, target, initialTab, {
+    headline: (url) => `${prefix} ${url}`,
+    download: (url, stayUrl) => `${url} started a download instead of opening a page; tab ${tabId} stays on ${stayUrl}`,
+  });
 }

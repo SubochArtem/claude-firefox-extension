@@ -188,6 +188,30 @@ export async function runMcpServer(): Promise<void> {
     (args) => bridge.call('navigate', args),
   );
 
+  server.registerTool(
+    'tabs_create',
+    {
+      description:
+        'Open a new background tab in the last focused Firefox window, empty or loading the given http(s) URL (a URL without a scheme gets https://). With a URL it waits for the page like navigate (up to 20 s); if the load fails the tab stays open. Returns the new tab id and the current tabs.',
+      inputSchema: z.object({
+        url: z.string().optional().describe('URL to open in the new tab; omit for an empty tab'),
+      }),
+    },
+    (args) => bridge.call('tabs_create', args),
+  );
+
+  server.registerTool(
+    'tabs_close',
+    {
+      description:
+        'Close a tab by its id from tabs_context. Refuses to close the last tab of the last browser window. Returns the remaining tabs.',
+      inputSchema: z.object({
+        tabId: z.number().int().positive().describe('Id of the tab to close, from tabs_context'),
+      }),
+    },
+    (args) => bridge.call('tabs_close', args),
+  );
+
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the
   // process alive after Claude Code has gone away.
   let exiting = false;

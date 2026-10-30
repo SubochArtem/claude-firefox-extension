@@ -74,7 +74,7 @@ describe('MCP server process', () => {
   it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
   });
@@ -94,6 +94,42 @@ describe('MCP server process', () => {
     expect(description).toMatch(/\bback\b/);
     expect(description).toMatch(/\bforward\b/);
     expect(description).toMatch(/tabs_context/);
+  });
+
+  it('lists tabs_create with an optional string url', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const tabsCreate = tools.find((tool) => tool.name === 'tabs_create');
+    expect(tabsCreate?.inputSchema).toMatchObject({ type: 'object', properties: { url: { type: 'string' } } });
+    expect(tabsCreate?.inputSchema.required ?? []).not.toContain('url');
+    expect(Object.keys(tabsCreate?.inputSchema.properties ?? {})).toEqual(['url']);
+    expect(tabsCreate?.description).toMatch(/background tab/);
+  });
+
+  it('lists tabs_close with a required integer tabId', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const tabsClose = tools.find((tool) => tool.name === 'tabs_close');
+    expect(tabsClose?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: { tabId: { type: 'integer', exclusiveMinimum: 0 } },
+      required: ['tabId'],
+    });
+    expect(Object.keys(tabsClose?.inputSchema.properties ?? {})).toEqual(['tabId']);
+    expect(tabsClose?.description).toMatch(/last tab/);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ['tabs_create', { url: 'example.com' }],
+    ['tabs_create', {}],
+    ['tabs_close', { tabId: 6 }],
+  ])('forwards a %s call with its arguments to the extension and back', async (tool, args) => {
+    const runtimeDir = await tempDir();
+    const host = await startHost(runtimeDir);
+    host.respondWith((request) => textResult(request['id'], 'done'));
+    const { client } = await startMcp(runtimeDir);
+    expect(await client.callTool({ name: tool, arguments: args })).toEqual({ content: [{ type: 'text', text: 'done' }] });
+    expect(host.received).toEqual([{ type: 'tool_request', id: expect.stringMatching(/^\d+:1$/), tool, args }]);
   });
 
   it('forwards a navigate call with its arguments to the extension and back', async () => {

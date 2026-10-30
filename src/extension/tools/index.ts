@@ -1,5 +1,6 @@
 import type { ContentBlock, ToolRequest, ToolResponse } from '../protocol';
 import { navigate } from './navigate';
+import { tabsClose, tabsCreate } from './tabs';
 import { tabsContext } from './tabs-context';
 import { ToolError } from './tool-error';
 
@@ -8,6 +9,8 @@ type ToolHandler = (args: Record<string, unknown>) => Promise<ContentBlock[]>;
 const tools = new Map<string, ToolHandler>([
   ['tabs_context', tabsContext],
   ['navigate', navigate],
+  ['tabs_create', tabsCreate],
+  ['tabs_close', tabsClose],
 ]);
 
 function errorResponse(id: string, text: string): ToolResponse {
