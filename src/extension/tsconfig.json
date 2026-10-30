@@ -2,7 +2,8 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "lib": ["es2024", "dom"],
-    "types": ["firefox-webext-browser"]
+    "types": ["firefox-webext-browser"],
+    "resolveJsonModule": true
   },
   "include": ["**/*.ts"]
 }

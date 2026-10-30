@@ -1,6 +1,6 @@
 import type { ContentBlock } from '../protocol';
 
-export async function tabsContext(): Promise<ContentBlock[]> {
+export async function tabsContextText(): Promise<string> {
   const [tabs, activeTabs] = await Promise.all([
     browser.tabs.query({ windowType: 'normal' }),
     browser.tabs.query({ active: true, lastFocusedWindow: true, windowType: 'normal' }),
@@ -17,5 +17,9 @@ export async function tabsContext(): Promise<ContentBlock[]> {
       })),
     activeTabId: activeTabs[0]?.id ?? null,
   };
-  return [{ type: 'text', text: JSON.stringify(context) }];
+  return JSON.stringify(context);
+}
+
+export async function tabsContext(): Promise<ContentBlock[]> {
+  return [{ type: 'text', text: await tabsContextText() }];
 }

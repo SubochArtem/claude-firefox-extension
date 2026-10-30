@@ -96,10 +96,14 @@ src/                   npm package root; every command is run from here
   scripts/test/        installer tests (run a copy of the installer against a temp HOME), e2e safety tests
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
-    test/              unit tests with a mocked `browser` global (browser-mock.ts); not copied into dist
+    test/              unit tests with a mocked `browser` global (browser-mock.ts); not copied into dist;
+                       manifest.test.ts checks the permissions the tools need
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close: http(s)-only URL
                            normalization, no userinfo or control characters, back/forward, positive tabId
+      navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events for load,
+                       same-document change, download, network error, closed tab or timeout (2 s start, 20 s total)
+      tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included
     test/              unit tests, process tests against the bundled host, in-process timeout tests with fake timers;

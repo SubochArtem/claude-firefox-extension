@@ -7,7 +7,7 @@
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
   },
-  "permissions": ["alarms", "nativeMessaging", "tabs"],
+  "permissions": ["alarms", "nativeMessaging", "tabs", "webNavigation"],
   "background": {
     "scripts": ["background.js"]
   },
