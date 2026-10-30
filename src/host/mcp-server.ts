@@ -158,15 +158,26 @@ function isOpen(socket: Socket): boolean {
 }
 
 export const computerInputSchema = z.strictObject({
-  action: z.enum(['screenshot']).describe('Action to perform; "screenshot" captures the visible part of the tab'),
+  action: z
+    .enum(['screenshot', 'zoom'])
+    .describe(
+      'Action to perform; "screenshot" captures the visible part of the tab, "zoom" captures a region of the last screenshot at higher resolution',
+    ),
   tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+  region: z
+    .array(z.number())
+    .length(4)
+    .optional()
+    .describe(
+      'Zoom only, required there: rectangle [x0, y0, x1, y1] to zoom into, in coordinates of the tab\'s last screenshot frame (top-left corner x0, y0 and bottom-right corner x1, y1; x1 > x0, y1 > y0). Take a screenshot first.',
+    ),
   scale: z
     .number()
     .min(0.1)
     .max(1)
     .optional()
     .describe(
-      'Screenshot only: shrink the returned image by this factor (0.1 to 1, default 1) to save tokens. Coordinates always refer to the full-resolution screenshot frame, never to the scaled image.',
+      'Screenshot and zoom: shrink the returned image by this factor (0.1 to 1, default 1) to save tokens. Coordinates always refer to the full-resolution screenshot frame, never to the scaled image.',
     ),
 });
 
@@ -229,7 +240,7 @@ export async function runMcpServer(): Promise<void> {
     'computer',
     {
       description:
-        'Interact with a browser tab. For now the only action is "screenshot": capture the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. More actions will be added.',
+        'Interact with a browser tab. "screenshot" captures the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. "zoom" captures the region [x0, y0, x1, y1] of the last screenshot frame at up to device resolution to read small details; it does not change the frame, so coordinates keep referring to the last screenshot. More actions will be added.',
       inputSchema: computerInputSchema,
     },
     (args) => bridge.call('computer', args),

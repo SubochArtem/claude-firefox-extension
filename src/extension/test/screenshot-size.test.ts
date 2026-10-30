@@ -6,6 +6,7 @@ import {
   MAX_IMAGE_TOKENS,
   screenshotSize,
   type Size,
+  zoomOutputSize,
 } from '../tools/screenshot-size';
 
 function fits({ width, height }: Size): boolean {
@@ -112,5 +113,43 @@ describe('screenshotSize', () => {
       output: { width: 157, height: 1 },
     });
     expect(screenshotSize({ width: 3, height: 3 }, 0.1).output).toEqual({ width: 1, height: 1 });
+  });
+});
+
+describe('zoomOutputSize', () => {
+  it('renders a small region at device pixels without upscaling further', () => {
+    expect(zoomOutputSize({ width: 200, height: 100 }, 2)).toEqual({ width: 400, height: 200 });
+    expect(zoomOutputSize({ width: 200, height: 100 }, 1)).toEqual({ width: 200, height: 100 });
+  });
+
+  it('fits a wide region into the token budget', () => {
+    const output = zoomOutputSize({ width: 1600, height: 200 }, 2);
+    expect(fits(output)).toBe(true);
+    expect(output).toEqual(fitFrameSize({ width: 3200, height: 400 }));
+    expect(output.width / output.height).toBeCloseTo(8, 1);
+  });
+
+  it('fits a tall region into the token budget', () => {
+    const output = zoomOutputSize({ width: 150, height: 1000 }, 1.5);
+    expect(fits(output)).toBe(true);
+    expect(output).toEqual(fitFrameSize({ width: 225, height: 1500 }));
+  });
+
+  it('keeps a tiny region at least 1 px on each side', () => {
+    expect(zoomOutputSize({ width: 0.4, height: 3 }, 1)).toEqual({ width: 1, height: 3 });
+    expect(zoomOutputSize({ width: 3, height: 3 }, 1, 0.1)).toEqual({ width: 1, height: 1 });
+  });
+
+  it('applies the scale after fitting', () => {
+    expect(zoomOutputSize({ width: 200, height: 100 }, 2, 0.5)).toEqual({ width: 200, height: 100 });
+    expect(zoomOutputSize({ width: 1920, height: 1080 }, 1, 0.5)).toEqual({ width: 728, height: 410 });
+  });
+
+  it.each([
+    [{ width: 0, height: 10 }, 1],
+    [{ width: 10, height: 10 }, 0],
+    [{ width: 10, height: 10 }, Number.NaN],
+  ])('rejects region %o at device pixel ratio %s', (region, ratio) => {
+    expect(() => zoomOutputSize(region, ratio)).toThrow(RangeError);
   });
 });

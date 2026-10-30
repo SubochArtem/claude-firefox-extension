@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeTool } from '../tools';
-import { MAX_IMAGE_BASE64_LENGTH, PERMISSION_MESSAGE, screenshotFrames } from '../tools/computer';
+import { MAX_IMAGE_BASE64_LENGTH, permissionMessage, screenshotFrames } from '../tools/computer';
 import { mockBrowser } from './browser-mock';
 
 const TAB = 5;
@@ -12,7 +12,7 @@ const SMALL_BYTES = 1_000;
 const LARGE_BYTES = 1_048_576;
 
 let browserMock: ReturnType<typeof mockBrowser>;
-let viewport: { width: number; height: number; devicePixelRatio: number };
+let viewport: { width: number; height: number; devicePixelRatio: number; scrollX: number; scrollY: number };
 let bitmapSize: { width: number; height: number };
 let bytesForQuality: (quality: number) => number;
 let canvases: FakeCanvas[];
@@ -42,7 +42,7 @@ class FakeCanvas {
 
 beforeEach(() => {
   browserMock = mockBrowser();
-  viewport = { width: 1280, height: 720, devicePixelRatio: 2 };
+  viewport = { width: 1280, height: 720, devicePixelRatio: 2, scrollX: 0, scrollY: 0 };
   bitmapSize = { width: 1280, height: 720 };
   bytesForQuality = () => SMALL_BYTES;
   canvases = [];
@@ -146,7 +146,7 @@ describe('computer screenshot: capture', () => {
   });
 
   it('downscales a large viewport to the frame and records the frame', async () => {
-    viewport = { width: 2560, height: 1440, devicePixelRatio: 1 };
+    viewport = { width: 2560, height: 1440, devicePixelRatio: 1, scrollX: 0, scrollY: 0 };
     bitmapSize = { width: 1456, height: 819 };
     const { text, image } = await screenshot();
     expect(browserMock.tabs.captureTab).toHaveBeenCalledWith(TAB, {
@@ -228,9 +228,10 @@ describe('computer screenshot: coordinate frames', () => {
 describe('computer screenshot: errors', () => {
   it('asks the user to grant the host permission in about:addons', async () => {
     browserMock.permissions.contains.mockResolvedValue(false);
-    expect(await failure()).toBe(PERMISSION_MESSAGE);
-    expect(PERMISSION_MESSAGE).toContain('about:addons');
-    expect(PERMISSION_MESSAGE).toContain('Access your data for all websites');
+    expect(await failure()).toBe(permissionMessage('take a screenshot'));
+    expect(await failure()).toMatch(/^Failed to take a screenshot: /);
+    expect(permissionMessage('take a screenshot')).toContain('about:addons');
+    expect(permissionMessage('take a screenshot')).toContain('Access your data for all websites');
     expect(browserMock.permissions.contains).toHaveBeenCalledWith({ origins: ['<all_urls>'] });
     expect(browserMock.scripting.executeScript).not.toHaveBeenCalled();
   });
@@ -281,7 +282,7 @@ describe('computer screenshot: errors', () => {
   });
 
   it('reports an unusable viewport', async () => {
-    viewport = { width: 0, height: 720, devicePixelRatio: 1 };
+    viewport = { ...viewport, width: 0 };
     expect(await failure()).toBe('Failed to take a screenshot of tab 5: the page reported no usable viewport size');
   });
 
@@ -293,5 +294,142 @@ describe('computer screenshot: errors', () => {
   it('reports a capture refused for permissions as a restricted page', async () => {
     browserMock.tabs.captureTab.mockRejectedValue(new Error('Missing activeTab permission'));
     expect(await failure()).toMatch(/^Cannot take a screenshot of tab 5/);
+  });
+});
+
+async function zoom(args: Record<string, unknown>) {
+  const response = await run({ action: 'zoom', ...args });
+  if (!('result' in response)) throw new Error(`expected a result, got ${JSON.stringify(response)}`);
+  const [text, image] = response.result.content;
+  if (text?.type !== 'text' || image?.type !== 'image') throw new Error('expected a text and an image block');
+  return { text: text.text, image };
+}
+
+async function zoomFailure(args: Record<string, unknown>): Promise<string> {
+  const response = await run({ action: 'zoom', ...args });
+  if (!('error' in response)) throw new Error('expected an error');
+  const [block] = response.error.content;
+  return block?.type === 'text' ? block.text : '';
+}
+
+describe('computer zoom', () => {
+  it('asks for a screenshot first when the tab has no frame', async () => {
+    expect(await zoomFailure({ region: [0, 0, 10, 10] })).toBe(
+      'No screenshot of tab 5 has been taken yet; take a screenshot first',
+    );
+    expect(browserMock.tabs.captureTab).not.toHaveBeenCalled();
+  });
+
+  it('rejects an invalid region before touching the browser', async () => {
+    expect(await zoomFailure({ region: [10, 0, 5, 10] })).toBe(
+      'Invalid computer arguments: region x1 must be greater than x0, received [10, 0, 5, 10]',
+    );
+    expect(browserMock.query).not.toHaveBeenCalled();
+  });
+
+  it('captures only the region at device pixels', async () => {
+    await screenshot();
+    browserMock.tabs.captureTab.mockClear();
+    bitmapSize = { width: 400, height: 200 };
+    const { text, image } = await zoom({ region: [100, 50, 300, 150] });
+    expect(browserMock.tabs.captureTab).toHaveBeenCalledWith(TAB, {
+      format: 'jpeg',
+      quality: 75,
+      rect: { x: 100, y: 50, width: 200, height: 100 },
+      scale: 2,
+    });
+    expect(text).toBe(
+      'Zoomed into region [100, 50, 300, 150] of the 1280x720 screenshot frame of tab 5 (400x200, jpeg). Coordinates still refer to the screenshot frame, not to this image.',
+    );
+    expect(image).toEqual({ type: 'image', data: CAPTURED, mimeType: 'image/jpeg' });
+    expect(canvases).toEqual([]);
+  });
+
+  it('maps the region through the frame and offsets the rect by the scroll position', async () => {
+    viewport = { width: 2560, height: 1440, devicePixelRatio: 1, scrollX: 30, scrollY: 500 };
+    await screenshot();
+    browserMock.tabs.captureTab.mockClear();
+    await zoom({ region: [0, 0, 728, 409.5] });
+    expect(browserMock.tabs.captureTab).toHaveBeenCalledWith(TAB, {
+      format: 'jpeg',
+      quality: 75,
+      rect: { x: 30, y: 500, width: 1280, height: 720 },
+      scale: 1,
+    });
+  });
+
+  it('fits a large region into the budget, applies scale and resizes on a canvas', async () => {
+    await screenshot();
+    browserMock.tabs.captureTab.mockClear();
+    bitmapSize = { width: 2560, height: 1440 };
+    const { text } = await zoom({ tabId: TAB, region: [0, 0, 1280, 720], scale: 0.5 });
+    expect(browserMock.tabs.captureTab).toHaveBeenCalledWith(TAB, {
+      format: 'jpeg',
+      quality: 75,
+      rect: { x: 0, y: 0, width: 1280, height: 720 },
+      scale: 728 / 1280,
+    });
+    expect(text).toContain('(728x410, jpeg)');
+    expect([canvases[0]?.width, canvases[0]?.height]).toEqual([728, 410]);
+  });
+
+  it('does not update the coordinate frame', async () => {
+    await screenshot();
+    const before = screenshotFrames.get(TAB);
+    viewport = { ...viewport, width: 1300, height: 800 };
+    await zoom({ region: [0, 0, 100, 100] });
+    expect(screenshotFrames.get(TAB)).toEqual(before);
+    expect(screenshotFrames.get(TAB)?.viewport).toEqual({ width: 1280, height: 720 });
+  });
+
+  it('refuses a region outside the current viewport', async () => {
+    await screenshot();
+    browserMock.tabs.captureTab.mockClear();
+    viewport = { ...viewport, width: 800, height: 600 };
+    expect(await zoomFailure({ region: [0, 0, 1280, 720] })).toBe(
+      'Region [0, 0, 1280, 720] is outside the current 800x600 viewport of tab 5, which changed since the last screenshot; take a new screenshot',
+    );
+    expect(browserMock.tabs.captureTab).not.toHaveBeenCalled();
+  });
+
+  it('refuses a region outside the last screenshot frame', async () => {
+    await screenshot();
+    expect(await zoomFailure({ region: [0, 0, 1290, 10] })).toBe(
+      'Region [0, 0, 1290, 10] is outside the last screenshot of tab 5 (1280x720); take a new screenshot',
+    );
+  });
+
+  it('reports a missing host permission like screenshot', async () => {
+    browserMock.permissions.contains.mockResolvedValue(false);
+    expect(await zoomFailure({ region: [0, 0, 10, 10] })).toBe(permissionMessage('zoom'));
+    expect(await zoomFailure({ region: [0, 0, 10, 10] })).toMatch(/^Failed to zoom: /);
+  });
+
+  it('refuses a restricted page like screenshot', async () => {
+    browserMock.tabs.get.mockResolvedValue({ id: OTHER_TAB, url: 'about:addons' });
+    expect(await zoomFailure({ tabId: OTHER_TAB, region: [0, 0, 10, 10] })).toMatch(
+      /^Cannot zoom into tab 6 .*Firefox does not let extensions access this page/,
+    );
+  });
+
+  it('reports a capture refused for permissions as a restricted page', async () => {
+    await screenshot();
+    browserMock.tabs.captureTab.mockRejectedValue(new Error('Missing activeTab permission'));
+    expect(await zoomFailure({ region: [0, 0, 10, 10] })).toMatch(/^Cannot zoom into tab 5/);
+  });
+
+  it('names the zoom action in capture and viewport failures', async () => {
+    await screenshot();
+    browserMock.tabs.captureTab.mockRejectedValue(new Error('capture went wrong'));
+    expect(await zoomFailure({ region: [0, 0, 10, 10] })).toBe('Failed to zoom into tab 5: capture went wrong');
+    viewport = { ...viewport, width: 0 };
+    expect(await zoomFailure({ region: [0, 0, 10, 10] })).toBe(
+      'Failed to zoom into tab 5: the page reported no usable viewport size',
+    );
+  });
+
+  it('names the zoom action when the tab does not exist', async () => {
+    browserMock.tabs.get.mockRejectedValue(new Error('Invalid tab ID: 99'));
+    expect(await zoomFailure({ tabId: 99, region: [0, 0, 10, 10] })).toMatch(/^Failed to zoom: tab 99 does not exist/);
   });
 });
