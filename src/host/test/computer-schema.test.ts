@@ -17,8 +17,20 @@ describe('computerInputSchema', () => {
     { action: 'screenshot', scale: 0.09 },
     { action: 'screenshot', scale: 1.1 },
     { action: 'screenshot', unknown: true },
+    { action: 'zoom', region: [0, 0, 10] },
+    { action: 'zoom', region: [0, 0, 10, '10'] },
   ])('rejects %j', (args) => {
     expect(computerInputSchema.safeParse(args).success).toBe(false);
+  });
+
+  it('accepts a zoom with a region', () => {
+    expect(computerInputSchema.safeParse({ action: 'zoom', region: [0, 0, 10, 10] }).success).toBe(true);
+    expect(computerInputSchema.safeParse({ action: 'zoom', tabId: 3, region: [1, 2, 3.5, 4], scale: 0.5 }).success).toBe(true);
+  });
+
+  it('describes region in screenshot frame coordinates', () => {
+    expect(computerInputSchema.shape.region.description).toContain('[x0, y0, x1, y1]');
+    expect(computerInputSchema.shape.region.description).toContain('screenshot frame');
   });
 
   it('tells the agent that coordinates refer to the full-resolution frame', () => {

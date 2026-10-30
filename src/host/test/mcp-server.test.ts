@@ -150,20 +150,22 @@ describe('MCP server process', () => {
     ]);
   });
 
-  it('lists computer with the screenshot action and optional tabId and scale', async () => {
+  it('lists computer with the screenshot and zoom actions and optional tabId, region and scale', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
     const computer = tools.find((tool) => tool.name === 'computer');
     expect(computer?.inputSchema).toMatchObject({
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['screenshot'] },
+        action: { type: 'string', enum: ['screenshot', 'zoom'] },
         tabId: { type: 'integer' },
+        region: { type: 'array', minItems: 4, maxItems: 4, items: { type: 'number' } },
         scale: { type: 'number', minimum: 0.1, maximum: 1 },
       },
       required: ['action'],
     });
     expect(computer?.description).toMatch(/screenshot/);
+    expect(computer?.description).toMatch(/zoom/);
   });
 
   it('returns a screenshot from the extension as MCP text and image content', async () => {

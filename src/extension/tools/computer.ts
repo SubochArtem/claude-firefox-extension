@@ -1,7 +1,7 @@
 import type { ContentBlock } from '../protocol';
-import { parseComputerArgs, type ScreenshotArgs } from './computer-input';
+import { parseComputerArgs, type ScreenshotArgs, type ZoomArgs } from './computer-input';
 import { CoordinateFrames } from './coordinate-frame';
-import { type Size, screenshotSize } from './screenshot-size';
+import { type Size, screenshotSize, zoomOutputSize } from './screenshot-size';
 import { ToolError } from './tool-error';
 
 // Base64 length that keeps an image at about 1 MB of decoded bytes.
@@ -10,8 +10,17 @@ export const START_JPEG_QUALITY = 0.75;
 export const JPEG_QUALITY_STEP = 0.05;
 export const MIN_JPEG_QUALITY = 0.1;
 
-export const PERMISSION_MESSAGE =
-  'Failed to take a screenshot: the extension is not allowed to access websites. Open about:addons, choose Claude Firefox Extension, open its Permissions tab and enable "Access your data for all websites", then try again.';
+interface ActionLabel {
+  verb: string;
+  target: string;
+}
+
+const SCREENSHOT_LABEL: ActionLabel = { verb: 'take a screenshot', target: 'take a screenshot of' };
+const ZOOM_LABEL: ActionLabel = { verb: 'zoom', target: 'zoom into' };
+
+export function permissionMessage(verb: string): string {
+  return `Failed to ${verb}: the extension is not allowed to access websites. Open about:addons, choose Claude Firefox Extension, open its Permissions tab and enable "Access your data for all websites", then try again.`;
+}
 
 // Firefox's default extensions.webextensions.restrictedDomains: no extension may script or capture them.
 const RESTRICTED_DOMAINS = new Set([
@@ -44,12 +53,12 @@ function errorMessage(error: unknown): string {
   return String(error);
 }
 
-async function resolveTab(tabId: number | undefined): Promise<browser.tabs.Tab & { id: number }> {
+async function resolveTab(tabId: number | undefined, label: ActionLabel): Promise<browser.tabs.Tab & { id: number }> {
   if (tabId === undefined) {
     const [active] = await browser.tabs.query({ active: true, lastFocusedWindow: true, windowType: 'normal' });
     if (active?.id === undefined) {
       throw new ToolError(
-        'Failed to take a screenshot: there is no active tab in a normal browser window. Pass a tabId from tabs_context.',
+        `Failed to ${label.verb}: there is no active tab in a normal browser window. Pass a tabId from tabs_context.`,
       );
     }
     return { ...active, id: active.id };
@@ -57,14 +66,14 @@ async function resolveTab(tabId: number | undefined): Promise<browser.tabs.Tab &
   const tab = await browser.tabs.get(tabId).catch(() => undefined);
   if (!tab) {
     throw new ToolError(
-      `Failed to take a screenshot: tab ${tabId} does not exist (it may have been closed). Call tabs_context to see current tabs.`,
+      `Failed to ${label.verb}: tab ${tabId} does not exist (it may have been closed). Call tabs_context to see current tabs.`,
     );
   }
   return { ...tab, id: tabId };
 }
 
-function restrictedPageMessage(tabId: number, url: string): string {
-  return `Cannot take a screenshot of tab ${tabId} (${url}): Firefox does not let extensions access this page (about: and other browser pages, addons.mozilla.org and other Mozilla sites, other extensions' pages, reader view, the PDF viewer), or the page failed to load. Navigate the tab to a regular website first.`;
+function restrictedPageMessage(label: ActionLabel, tabId: number, url: string): string {
+  return `Cannot ${label.target} tab ${tabId} (${url}): Firefox does not let extensions access this page (about: and other browser pages, addons.mozilla.org and other Mozilla sites, other extensions' pages, reader view, the PDF viewer), or the page failed to load. Navigate the tab to a regular website first.`;
 }
 
 function isRestrictedUrl(url: string): boolean {
@@ -85,36 +94,60 @@ function isPermissionError(message: string): boolean {
 
 interface Viewport extends Size {
   devicePixelRatio: number;
+  scrollX: number;
+  scrollY: number;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
 }
 
 function isPositive(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+  return isFiniteNumber(value) && value > 0;
 }
 
-async function readViewport(tabId: number, url: string): Promise<Viewport> {
+async function readViewport(label: ActionLabel, tabId: number, url: string): Promise<Viewport> {
   let results: browser.scripting.InjectionResult<unknown>[];
   try {
     results = await browser.scripting.executeScript({
       target: { tabId },
       injectImmediately: true,
-      func: () => ({ width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio }),
+      func: () => ({
+        width: window.innerWidth,
+        height: window.innerHeight,
+        devicePixelRatio: window.devicePixelRatio,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+      }),
     });
   } catch (error) {
     const message = errorMessage(error);
-    if (isPermissionError(message)) throw new ToolError(restrictedPageMessage(tabId, url));
-    throw new ToolError(`Failed to take a screenshot of tab ${tabId}: could not read the viewport size: ${message}`);
+    if (isPermissionError(message)) throw new ToolError(restrictedPageMessage(label, tabId, url));
+    throw new ToolError(`Failed to ${label.target} tab ${tabId}: could not read the viewport size: ${message}`);
   }
   const [main] = results;
   if (main?.error !== undefined) {
     throw new ToolError(
-      `Failed to take a screenshot of tab ${tabId}: could not read the viewport size: ${errorMessage(main.error)}`,
+      `Failed to ${label.target} tab ${tabId}: could not read the viewport size: ${errorMessage(main.error)}`,
     );
   }
   const value = main?.result as Partial<Viewport> | undefined;
-  if (!isPositive(value?.width) || !isPositive(value.height) || !isPositive(value.devicePixelRatio)) {
-    throw new ToolError(`Failed to take a screenshot of tab ${tabId}: the page reported no usable viewport size`);
+  if (
+    !isPositive(value?.width) ||
+    !isPositive(value.height) ||
+    !isPositive(value.devicePixelRatio) ||
+    !isFiniteNumber(value.scrollX) ||
+    !isFiniteNumber(value.scrollY)
+  ) {
+    throw new ToolError(`Failed to ${label.target} tab ${tabId}: the page reported no usable viewport size`);
   }
-  return { width: value.width, height: value.height, devicePixelRatio: value.devicePixelRatio };
+  return {
+    width: value.width,
+    height: value.height,
+    devicePixelRatio: value.devicePixelRatio,
+    scrollX: value.scrollX,
+    scrollY: value.scrollY,
+  };
 }
 
 function base64FromBytes(bytes: Uint8Array): string {
@@ -167,32 +200,49 @@ async function encodeJpeg(dataUrl: string, output: Size): Promise<string> {
   }
 }
 
-async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
-  const tab = await resolveTab(args.tabId);
-  const tabId = tab.id;
+async function capturableTab(
+  tabId: number | undefined,
+  label: ActionLabel,
+): Promise<{ tabId: number; url: string }> {
+  const tab = await resolveTab(tabId, label);
   const url = tab.url ?? '';
-  if (isRestrictedUrl(url)) throw new ToolError(restrictedPageMessage(tabId, url));
-  if (!(await browser.permissions.contains({ origins: ['<all_urls>'] }))) throw new ToolError(PERMISSION_MESSAGE);
+  if (isRestrictedUrl(url)) throw new ToolError(restrictedPageMessage(label, tab.id, url));
+  if (!(await browser.permissions.contains({ origins: ['<all_urls>'] }))) {
+    throw new ToolError(permissionMessage(label.verb));
+  }
+  return { tabId: tab.id, url };
+}
 
-  const viewport = await readViewport(tabId, url);
-  const scale = args.scale ?? 1;
-  const { frame, output } = screenshotSize(viewport, scale);
-
-  let base64: string;
+async function capture(
+  label: ActionLabel,
+  tabId: number,
+  url: string,
+  options: browser.extensionTypes.ImageDetails,
+  output: Size,
+): Promise<string> {
   try {
-    // tabs.captureTab renders the tab without activating it, unlike captureVisibleTab. Its scale is
-    // in image pixels per CSS pixel, so this renders the viewport at about the output size.
     const dataUrl = await browser.tabs.captureTab(tabId, {
       format: 'jpeg',
       quality: Math.round(START_JPEG_QUALITY * 100),
-      scale: output.width / viewport.width,
+      ...options,
     });
-    base64 = await encodeJpeg(dataUrl, output);
+    return await encodeJpeg(dataUrl, output);
   } catch (error) {
     const message = errorMessage(error);
-    if (isPermissionError(message)) throw new ToolError(restrictedPageMessage(tabId, url));
-    throw new ToolError(`Failed to take a screenshot of tab ${tabId}: ${message}`);
+    if (isPermissionError(message)) throw new ToolError(restrictedPageMessage(label, tabId, url));
+    throw new ToolError(`Failed to ${label.target} tab ${tabId}: ${message}`);
   }
+}
+
+async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
+  const { tabId, url } = await capturableTab(args.tabId, SCREENSHOT_LABEL);
+  const viewport = await readViewport(SCREENSHOT_LABEL, tabId, url);
+  const scale = args.scale ?? 1;
+  const { frame, output } = screenshotSize(viewport, scale);
+
+  // tabs.captureTab renders the tab without activating it, unlike captureVisibleTab. Its scale is
+  // in image pixels per CSS pixel, so this renders the viewport at about the output size.
+  const base64 = await capture(SCREENSHOT_LABEL, tabId, url, { scale: output.width / viewport.width }, output);
 
   screenshotFrames.record(tabId, { width: viewport.width, height: viewport.height }, frame);
   if (!browser.tabs.onRemoved.hasListener(forgetFrame)) browser.tabs.onRemoved.addListener(forgetFrame);
@@ -207,8 +257,37 @@ async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
   ];
 }
 
+// Zoom keeps the last screenshot's coordinate frame, so later actions still use its coordinates.
+async function zoom(args: ZoomArgs): Promise<ContentBlock[]> {
+  const { tabId, url } = await capturableTab(args.tabId, ZOOM_LABEL);
+  const { frame } = screenshotFrames.require(tabId);
+  const viewport = await readViewport(ZOOM_LABEL, tabId, url);
+  const rect = screenshotFrames.regionToViewport(tabId, args.region, viewport);
+  const output = zoomOutputSize(rect, viewport.devicePixelRatio, args.scale ?? 1);
+
+  // captureTab's rect is relative to the document, not to the viewport.
+  const base64 = await capture(
+    ZOOM_LABEL,
+    tabId,
+    url,
+    {
+      rect: { x: rect.x + viewport.scrollX, y: rect.y + viewport.scrollY, width: rect.width, height: rect.height },
+      scale: output.width / rect.width,
+    },
+    output,
+  );
+
+  return [
+    {
+      type: 'text',
+      text: `Zoomed into region [${args.region.join(', ')}] of the ${frame.width}x${frame.height} screenshot frame of tab ${tabId} (${output.width}x${output.height}, jpeg). Coordinates still refer to the screenshot frame, not to this image.`,
+    },
+    { type: 'image', data: base64, mimeType: 'image/jpeg' },
+  ];
+}
+
 export async function computer(args: Record<string, unknown>): Promise<ContentBlock[]> {
   const parsed = parseComputerArgs(args);
   if (!parsed.ok) throw new ToolError(`Invalid computer arguments: ${parsed.error}`);
-  return screenshot(parsed.value);
+  return parsed.value.action === 'zoom' ? zoom(parsed.value) : screenshot(parsed.value);
 }

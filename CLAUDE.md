@@ -12,7 +12,7 @@ Claude Code ──MCP (stdio)──> native host ──native messaging──> F
 ```
 
 - **MCP server / native host**: exposes browser tools to Claude Code over stdio and relays them to the extension through native messaging.
-- **Extension**: tabs, screenshots (`tabs.captureVisibleTab`), script execution (`scripting.executeScript`), network (`webRequest`), console capture, accessibility tree built from the DOM with `ref_N` element references.
+- **Extension**: tabs, screenshots (`tabs.captureTab`), script execution (`scripting.executeScript`), network (`webRequest`), console capture, accessibility tree built from the DOM with `ref_N` element references.
 - **WebDriver BiDi**: Firefox WebExtensions cannot produce trusted input events, so clicks and keystrokes go through BiDi `input.performActions`. Firefox must be started with `--remote-debugging-port`.
 
 ## Tools
@@ -61,7 +61,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/windows-support`: named pipe with a random name per host start plus the authenticated bridge handshake, installer writing `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` and a `.bat` wrapper, Windows paths in host and scripts.
 - [ ] `feature/amo-signing`: reserve a real extension id on AMO, sign with `web-ext sign` (unlisted), permanent install in release Firefox, verify `runtime.onStartup` reconnect. Needs the user's AMO account and API keys; timing decided separately.
 - [x] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
-- [ ] `feature/screenshot`: screenshots via `tabs.captureVisibleTab`.
+- [x] `feature/screenshot`: screenshots and zoom via `tabs.captureTab`.
 - [ ] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); user choice between a dedicated agent container (`contextualIdentities`, isolated cookies and logins) and the normal profile, with default, switch location and per-domain mixing decided at the start; design after researching how Claude in Chrome does it.
 - [ ] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
 - [ ] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
@@ -95,12 +95,12 @@ src/                   npm package root; every command is run from here
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
-      computer-input.ts  pure argument validation for the computer tool (screenshot action)
+      computer-input.ts  pure argument validation for the computer tool (screenshot and zoom actions)
       screenshot-size.ts  screenshot frame and output sizes within the image token budget
       coordinate-frame.ts  per-tab last screenshot frame, maps frame coordinates to viewport CSS pixels
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
-      computer.ts      computer tool, action screenshot: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
+      computer.ts      computer tool, actions screenshot and zoom: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included

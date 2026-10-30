@@ -58,3 +58,12 @@ export function screenshotSize(viewport: Size, scale = 1): ScreenshotSize {
   };
   return { frame, output };
 }
+
+// A zoomed region is rendered at most at device pixels, then fitted into the same image budget.
+export function zoomOutputSize(region: Size, devicePixelRatio: number, scale = 1): Size {
+  const fitted = fitFrameSize({ width: region.width * devicePixelRatio, height: region.height * devicePixelRatio });
+  return {
+    width: Math.max(1, Math.round(fitted.width * scale)),
+    height: Math.max(1, Math.round(fitted.height * scale)),
+  };
+}

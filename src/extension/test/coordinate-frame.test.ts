@@ -92,3 +92,87 @@ describe('CoordinateFrames', () => {
     expect(() => store().toViewport(5, { x: Number.NaN, y: 1 })).toThrow(ToolError);
   });
 });
+
+describe('CoordinateFrames.regionToViewport', () => {
+  const current = { width: 1920, height: 1080 };
+
+  it('maps a frame region to a viewport CSS rect', () => {
+    expect(store().regionToViewport(5, [0, 0, 728, 409.5], current)).toEqual({ x: 0, y: 0, width: 960, height: 540 });
+    const rect = store().regionToViewport(5, [100, 200, 300, 400], current);
+    expect(rect.x).toBeCloseTo((100 * 1920) / 1456, 9);
+    expect(rect.y).toBeCloseTo((200 * 1080) / 819, 9);
+    expect(rect.width).toBeCloseTo((200 * 1920) / 1456, 9);
+    expect(rect.height).toBeCloseTo((200 * 1080) / 819, 9);
+  });
+
+  it('maps the whole frame to the whole viewport', () => {
+    expect(store().regionToViewport(5, [0, 0, 1456, 819], current)).toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
+  });
+
+  it('accepts corners up to the tolerance beyond the frame and clamps them to the viewport edge', () => {
+    expect(store().regionToViewport(5, [728, 409.5, 1458, 821], current)).toEqual({
+      x: 960,
+      y: 540,
+      width: 960,
+      height: 540,
+    });
+  });
+
+  it.each([
+    [[0, 0, 1458.5, 10]],
+    [[0, 0, 10, 822]],
+    [[1459, 0, 1460, 10]],
+  ])('rejects %j outside the frame', (region) => {
+    const [x0, y0, x1, y1] = region as [number, number, number, number];
+    expect(() => store().regionToViewport(5, [x0, y0, x1, y1], current)).toThrow(ToolError);
+    expect(() => store().regionToViewport(5, [x0, y0, x1, y1], current)).toThrow(
+      `Region [${x0}, ${y0}, ${x1}, ${y1}] is outside the last screenshot of tab 5 (1456x819); take a new screenshot`,
+    );
+  });
+
+  it('rejects a region that is empty after clamping to the frame', () => {
+    expect(() => store().regionToViewport(5, [1456, 0, 1458, 10], current)).toThrow(
+      'Region [1456, 0, 1458, 10] is outside the last screenshot of tab 5 (1456x819); take a new screenshot',
+    );
+  });
+
+  it('accepts a region inside a viewport that shrank since the screenshot', () => {
+    expect(store().regionToViewport(5, [0, 0, 728, 409.5], { width: 1280, height: 720 })).toEqual({
+      x: 0,
+      y: 0,
+      width: 960,
+      height: 540,
+    });
+  });
+
+  it('clamps a region touching the edge of a viewport that shrank by less than a pixel', () => {
+    expect(store().regionToViewport(5, [0, 0, 1456, 819], { width: 1919.5, height: 1079.2 })).toEqual({
+      x: 0,
+      y: 0,
+      width: 1919.5,
+      height: 1079.2,
+    });
+  });
+
+  it('rejects a region touching the edge of a viewport that shrank by more than a pixel', () => {
+    expect(() => store().regionToViewport(5, [0, 0, 1456, 819], { width: 1918.5, height: 1080 })).toThrow(
+      'Region [0, 0, 1456, 819] is outside the current 1918.5x1080 viewport of tab 5, which changed since the last screenshot; take a new screenshot',
+    );
+  });
+
+  it.each([
+    [{ width: 1280, height: 1080 }],
+    [{ width: 1920, height: 720 }],
+  ])('rejects a region outside the current viewport %o', (viewport) => {
+    expect(() => store().regionToViewport(5, [0, 0, 1456, 819], viewport)).toThrow(ToolError);
+    expect(() => store().regionToViewport(5, [0, 0, 1456, 819], viewport)).toThrow(
+      `Region [0, 0, 1456, 819] is outside the current ${viewport.width}x${viewport.height} viewport of tab 5, which changed since the last screenshot; take a new screenshot`,
+    );
+  });
+
+  it('requires a screenshot of the tab first', () => {
+    expect(() => store().regionToViewport(6, [0, 0, 1, 1], current)).toThrow(
+      'No screenshot of tab 6 has been taken yet; take a screenshot first',
+    );
+  });
+});
