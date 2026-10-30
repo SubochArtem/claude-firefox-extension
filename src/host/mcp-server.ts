@@ -157,6 +157,19 @@ function isOpen(socket: Socket): boolean {
   return !socket.destroyed && !socket.readableEnded && !socket.writableEnded;
 }
 
+export const computerInputSchema = z.strictObject({
+  action: z.enum(['screenshot']).describe('Action to perform; "screenshot" captures the visible part of the tab'),
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+  scale: z
+    .number()
+    .min(0.1)
+    .max(1)
+    .optional()
+    .describe(
+      'Screenshot only: shrink the returned image by this factor (0.1 to 1, default 1) to save tokens. Coordinates always refer to the full-resolution screenshot frame, never to the scaled image.',
+    ),
+});
+
 function errorResult(text: string): CallToolResult {
   return { content: [{ type: 'text', text }], isError: true };
 }
