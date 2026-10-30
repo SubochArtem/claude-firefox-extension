@@ -1,4 +1,5 @@
 import type { ContentBlock, ToolRequest, ToolResponse } from '../protocol';
+import { computer } from './computer';
 import { navigate } from './navigate';
 import { tabsClose, tabsCreate } from './tabs';
 import { tabsContext } from './tabs-context';
@@ -11,6 +12,7 @@ const tools = new Map<string, ToolHandler>([
   ['navigate', navigate],
   ['tabs_create', tabsCreate],
   ['tabs_close', tabsClose],
+  ['computer', computer],
 ]);
 
 function errorResponse(id: string, text: string): ToolResponse {

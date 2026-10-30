@@ -34,6 +34,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Firefox MV3 host permissions are opt-in: a feature that needs them must document granting them in `about:addons` or request them at runtime.
 - Bridge: the native host listens on a private Unix socket (Linux, macOS) or a random named pipe (Windows), publishes `bridge.json` with a per-start secret, runs a mutual HMAC handshake with every MCP server process, then multiplexes newline-delimited JSON by rewriting ids to `<clientId>:<id>`; see [Bridge protocol](docs/decisions.md#bridge-protocol) for endpoints, `bridge.json`, the Windows second-host check, limits and startup buffering/backoff.
 - tabs_create opens a background tab in the last focused normal window; tabs_close refuses the last tab of the last normal window.
+- Screenshots: one `computer` tool whose action enum grows per feature; `tabs.captureTab` without activating the tab, fitted to 1568 px / 1568 tokens, JPEG quality stepped down to fit about 1 MB; `<all_urls>` granted manually in about:addons until `feature/permissions`; see [Screenshots](docs/decisions.md#screenshots).
 - Tab scope: until `feature/permissions`, the agent may navigate and close any tab in any normal window (user decision); revisited there together with per-site permissions and the agent container.
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
@@ -99,6 +100,7 @@ src/                   npm package root; every command is run from here
       coordinate-frame.ts  per-tab last screenshot frame, maps frame coordinates to viewport CSS pixels
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
+      computer.ts      computer tool, action screenshot: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included

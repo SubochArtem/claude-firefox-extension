@@ -531,6 +531,8 @@ async function main() {
   let first;
   /** @type {string} */
   let firstBridgeText = '';
+  /** @type {string} */
+  let pageUrl = '';
 
   await step('prerequisites', async () => {
     for (const path of [hostEntry, join(extensionDir, 'manifest.json')]) {
@@ -598,6 +600,7 @@ async function main() {
     const client = mcpClient;
     check(client !== undefined, 'no MCP client');
     const url = await startPageServer();
+    pageUrl = url;
     const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const loaded = await createAndCloseTab(
       client,
@@ -606,6 +609,33 @@ async function main() {
     );
     const blank = await createAndCloseTab(client, {}, /^Created tab (\d+)\n/);
     return `tab ${loaded} with ${url}, blank tab ${blank}`;
+  });
+
+  await step('computer screenshot of a background tab through the MCP server', async () => {
+    const client = mcpClient;
+    check(client !== undefined, 'no MCP client');
+    const created = await client.callTool({ name: 'tabs_create', arguments: { url: pageUrl } });
+    const createdText = resultText(created);
+    const tabId = Number(/^Created tab (\d+) /.exec(createdText)?.[1]);
+    check(!created.isError && Number.isInteger(tabId), `tabs_create failed: ${createdText}`);
+    try {
+      const result = await client.callTool({ name: 'computer', arguments: { action: 'screenshot', tabId } });
+      const content = /** @type {{ type: string, text?: string, data?: string, mimeType?: string }[]} */ (result.content ?? []);
+      const text = resultText(result);
+      const image = content.find((block) => block.type === 'image');
+      const context = JSON.parse(resultText(await client.callTool({ name: 'tabs_context', arguments: {} })));
+      const tab = context.tabs.find((/** @type {{ tabId: number }} */ entry) => entry.tabId === tabId);
+      check(!result.isError, `computer screenshot failed: ${text}`);
+      const size = /^Captured screenshot \((\d+)x(\d+), jpeg\)/.exec(text);
+      check(size !== null, `unexpected screenshot text: ${text}`);
+      check(image?.mimeType === 'image/jpeg' && typeof image.data === 'string', 'the screenshot has no JPEG image block');
+      const bytes = Buffer.from(image.data, 'base64');
+      check(bytes[0] === 0xff && bytes[1] === 0xd8, 'the screenshot image is not a JPEG');
+      check(tab?.active === false, `the screenshot activated tab ${tabId}`);
+      return `${size[1]}x${size[2]}, ${bytes.length} bytes`;
+    } finally {
+      await client.callTool({ name: 'tabs_close', arguments: { tabId } });
+    }
   });
 
   await step('a tool request without the handshake is closed unanswered', async () => {

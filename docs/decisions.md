@@ -96,6 +96,15 @@ If writing or registration fails, files that existed before the run get their pr
 - `windows.get` and `windows.getLastFocused` need no manifest permission.
 - `tool-error.ts`: `ToolError` marks an expected failure whose message reaches the agent without the generic prefix.
 
+## Screenshots
+
+- One `computer` tool carries all page interaction; its `action` enum grows per feature (`screenshot` now, click, type, key and scroll with `feature/bidi-input`), and the host schema and the extension parser offer the same actions.
+- `computer.ts` captures with `tabs.captureTab`, which renders a background tab without activating it, so the user's view is not switched; `captureVisibleTab` would need the tab in front. The viewport (`innerWidth`, `innerHeight`, `devicePixelRatio`) is read with `scripting.executeScript`, and `captureTab`'s `scale` (image pixels per CSS pixel) is set so the capture comes out at about the output size.
+- Token budget: about 28 px per token per side, at most 1568 px on a side and 1568 tokens per image. The viewport is fitted into that frame (`screenshot-size.ts`); the agent's `scale` shrinks only the returned image, and coordinates always refer to the frame, which is recorded per tab (`coordinate-frame.ts`) and forgotten on `tabs.onRemoved`.
+- JPEG: captured at quality 0.75; if the capture is not the output size or its base64 is longer than 1,398,100 characters (about 1 MB), it is redrawn on an `OffscreenCanvas` and re-encoded, stepping the quality down by 0.05 to a floor of 0.1. The bridge limits (64 MB per line and native message from the extension) need no change.
+- Permissions: `scripting` and `host_permissions: ["<all_urls>"]` (`captureTab` requires `<all_urls>`). Firefox MV3 host permissions are opt-in: until `feature/permissions`, the user grants them in about:addons (extension, Permissions, "Access your data for all websites"); without them the tool says so. A temporary install (web-ext, e2e) gets them granted.
+- Restricted pages (non-http(s)/file URLs such as about: pages, Mozilla's restricted domains like addons.mozilla.org, other extensions' pages, reader view, the PDF viewer) are refused with a clear message.
+
 ## Native host installation paths
 
 `npm run install-host` writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary, and the manifest `claude_firefox_extension.json`:
@@ -136,10 +145,11 @@ TDD where it fits: logic with a spec known up front (protocols, framing, multipl
 2. Loads the extension with the `web-ext` Node API in a temporary profile and waits for `bridge.json`.
 3. Calls `tabs_context` through the MCP server (SDK default environment).
 4. Opens a tab with `tabs_create` on a page served by the script on `127.0.0.1` and a blank one, checks each appears in `tabs_context`, closes it with `tabs_close` and checks it is gone.
-5. Checks that a tool request without the handshake is closed unanswered.
-6. Runs a second Firefox for 40 s and requires 2 to 10 native host starts from it (counted by a `NODE_OPTIONS` preload) with `bridge.json` unchanged.
-7. Stops the first Firefox and expects `bridge.json` removed and the not-connected error.
-8. Uninstalls.
+5. Takes a `computer` screenshot of a background tab on that page, checks the JPEG image block and that the tab stayed inactive.
+6. Checks that a tool request without the handshake is closed unanswered.
+7. Runs a second Firefox for 40 s and requires 2 to 10 native host starts from it (counted by a `NODE_OPTIONS` preload) with `bridge.json` unchanged.
+8. Stops the first Firefox and expects `bridge.json` removed and the not-connected error.
+9. Uninstalls.
 
 It prints a PASS/FAIL summary and exits non-zero on failure. `E2E_FIREFOX` overrides the Firefox binary.
 
