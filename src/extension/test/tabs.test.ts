@@ -4,6 +4,8 @@ import { PROMPT_ANSWER_MESSAGE } from '../permissions/approval';
 import { handlePromptMessage } from '../permissions/popup-prompt';
 import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 import { blockedMessage, deniedMessage } from '../permissions/site-access';
+import { containerUnavailableMessage } from '../permissions/agent-container';
+import { SETTINGS_STORAGE_KEY } from '../settings';
 import { EXTENSION_ID, mockBrowser } from './browser-mock';
 
 const WINDOW = 1;
@@ -17,6 +19,7 @@ const ABORTED = 'Error code 2152398850';
 const UNKNOWN_HOST = 'Error code 2152398878';
 const PROMPT_WINDOW = 50;
 const SECOND_WINDOW = 3;
+const CONTAINER = 'firefox-container-1';
 
 let browserMock: ReturnType<typeof mockBrowser>;
 let openTabs: Map<number, Partial<browser.tabs.Tab>>;
@@ -127,7 +130,7 @@ function emitLoad(tabId: number, url: string) {
 describe('tabs_create', () => {
   it('opens a blank background tab in the last focused normal window without waiting', async () => {
     const state = await run('tabs_create', {});
-    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false });
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false, cookieStoreId: CONTAINER });
     expect(browserMock.tabs.update).not.toHaveBeenCalled();
     expect(state.value).toEqual(success(`Created tab ${NEW_TAB}\n\nTabs context: ${tabsContext()}`));
   });
@@ -137,7 +140,7 @@ describe('tabs_create', () => {
       openTabs.set(NEW_TAB, { ...openTabs.get(NEW_TAB), url: TARGET, title: 'Example Domain' });
       emitLoad(NEW_TAB, TARGET);
     });
-    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false });
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false, cookieStoreId: CONTAINER });
     expect(browserMock.tabs.update).toHaveBeenCalledWith(NEW_TAB, { url: TARGET });
     expect(state.value).toEqual(
       success(`Created tab ${NEW_TAB} and navigated to ${TARGET}\nTitle: Example Domain\n\nTabs context: ${tabsContext()}`),
@@ -231,7 +234,7 @@ describe('tabs_create', () => {
     browserMock.windows.getAll.mockResolvedValue(windows);
     await run('tabs_create', {});
     expect(browserMock.windows.getAll).toHaveBeenCalledWith({ windowTypes: ['normal'] });
-    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: expected, url: 'about:blank', active: false });
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: expected, url: 'about:blank', active: false, cookieStoreId: CONTAINER });
   });
 
   it.each<[string, () => void]>([
@@ -247,6 +250,85 @@ describe('tabs_create', () => {
     setup();
     const state = await run('tabs_create', { url: TARGET });
     expect(state.value).toEqual(failure('Failed to create a tab: there is no normal browser window to open it in'));
+    expect(browserMock.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Partial<browser.windows.Window>, Partial<browser.windows.Window>[], number]>([
+    [
+      'the focused private window',
+      { id: WINDOW, type: 'normal', incognito: true },
+      [{ id: WINDOW, type: 'normal', incognito: true, focused: true }, { id: SECOND_WINDOW, type: 'normal', incognito: false, focused: false }],
+      SECOND_WINDOW,
+    ],
+    [
+      'a focused private window listed last',
+      { id: POPUP_WINDOW, type: 'popup' },
+      [{ id: SECOND_WINDOW, type: 'normal', focused: false }, { id: WINDOW, type: 'normal', incognito: true, focused: true }],
+      SECOND_WINDOW,
+    ],
+  ])('skips %s for a container tab', async (_label, lastFocused, windows, expected) => {
+    browserMock.windows.getLastFocused.mockResolvedValue(lastFocused);
+    browserMock.windows.getAll.mockResolvedValue(windows);
+    await run('tabs_create', {});
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: expected, url: 'about:blank', active: false, cookieStoreId: CONTAINER });
+  });
+
+  it('fails without creating a tab when only private windows are open and a container is used', async () => {
+    browserMock.windows.getLastFocused.mockResolvedValue({ id: WINDOW, type: 'normal', incognito: true });
+    browserMock.windows.getAll.mockResolvedValue([{ id: WINDOW, type: 'normal', incognito: true, focused: true }]);
+    const state = await run('tabs_create', {});
+    expect(state.value).toEqual(
+      failure(
+        'Failed to create a tab: container tabs cannot open in private windows, and no regular browser window is open. The user can open a regular window or switch agent tabs to the normal profile in the extension options.',
+      ),
+    );
+    expect(browserMock.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('opens the tab in the focused private window when the normal profile is used', async () => {
+    browserMock.storage.local.data.set(SETTINGS_STORAGE_KEY, { agentTabs: 'default' });
+    browserMock.windows.getLastFocused.mockResolvedValue({ id: WINDOW, type: 'normal', incognito: true });
+    await run('tabs_create', {});
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false });
+  });
+
+  it('opens the tab in the normal profile when the setting says so', async () => {
+    browserMock.storage.local.data.set(SETTINGS_STORAGE_KEY, { agentTabs: 'default' });
+    const state = await run('tabs_create', {});
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false });
+    expect(browserMock.contextualIdentities.query).not.toHaveBeenCalled();
+    expect(browserMock.contextualIdentities.create).not.toHaveBeenCalled();
+    expect(state.value).toEqual(success(`Created tab ${NEW_TAB}\n\nTabs context: ${tabsContext()}`));
+  });
+
+  it('opens the tab in the container when the stored setting is invalid', async () => {
+    browserMock.storage.local.data.set(SETTINGS_STORAGE_KEY, { agentTabs: 'private' });
+    await run('tabs_create', {});
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false, cookieStoreId: CONTAINER });
+  });
+
+  it('reuses one container for parallel calls', async () => {
+    const first = track(executeTool(request('tabs_create', {})));
+    const second = track(executeTool(request('tabs_create', {})));
+    await flush();
+    expect(first.settled && second.settled).toBe(true);
+    expect(browserMock.contextualIdentities.create).toHaveBeenCalledTimes(1);
+    expect(browserMock.tabs.create.mock.calls.map(([properties]) => properties.cookieStoreId)).toEqual([CONTAINER, CONTAINER]);
+  });
+
+  it('fails without asking for permission or creating a tab when containers are disabled', async () => {
+    const detail = 'Contextual identities are currently disabled';
+    browserMock.contextualIdentities.query.mockRejectedValue(new Error(detail));
+    const state = await run('tabs_create', { url: 'https://new.example/' });
+    expect(state.value).toEqual(failure(containerUnavailableMessage(detail)));
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
+    expect(browserMock.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('fails without creating a tab when the contextualIdentities API is missing', async () => {
+    vi.stubGlobal('browser', { ...browser, contextualIdentities: undefined });
+    const state = await run('tabs_create', {});
+    expect(state.value).toEqual(failure(containerUnavailableMessage('the contextualIdentities API is not available')));
     expect(browserMock.tabs.create).not.toHaveBeenCalled();
   });
 
@@ -387,7 +469,7 @@ describe('site permissions', () => {
     const id = new URL(promptUrl).searchParams.get('id');
     await handlePromptMessage({ type: PROMPT_ANSWER_MESSAGE, id, answer: 'allow_once' }, { id: EXTENSION_ID, url: promptUrl });
     await flush();
-    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false });
+    expect(browserMock.tabs.create).toHaveBeenCalledWith({ windowId: WINDOW, url: 'about:blank', active: false, cookieStoreId: CONTAINER });
     openTabs.set(NEW_TAB, { ...openTabs.get(NEW_TAB), url, title: 'New' });
     emitLoad(NEW_TAB, url);
     await flush();

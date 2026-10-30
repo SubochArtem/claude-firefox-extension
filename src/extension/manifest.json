@@ -7,8 +7,20 @@
     "48": "icons/icon.svg",
     "96": "icons/icon.svg"
   },
-  "permissions": ["alarms", "nativeMessaging", "scripting", "storage", "tabs", "webNavigation"],
+  "permissions": [
+    "alarms",
+    "contextualIdentities",
+    "cookies",
+    "nativeMessaging",
+    "scripting",
+    "storage",
+    "tabs",
+    "webNavigation"
+  ],
   "host_permissions": ["<all_urls>"],
+  "options_ui": {
+    "page": "options/options.html"
+  },
   "background": {
     "scripts": ["background.js"]
   },

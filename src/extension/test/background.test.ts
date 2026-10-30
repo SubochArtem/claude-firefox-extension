@@ -32,10 +32,11 @@ beforeEach(async () => {
 });
 
 describe('background script', () => {
-  it('connects once at load and registers exactly one message listener', async () => {
+  it('connects once at load and registers the prompt and options message listeners', async () => {
     const { handlePromptMessage } = await import('../permissions/popup-prompt');
+    const { handleOptionsMessage } = await import('../options/options-messages');
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(onMessage.listeners).toEqual([handlePromptMessage]);
+    expect(onMessage.listeners).toEqual([handlePromptMessage, handleOptionsMessage]);
     expect(onStartup.listeners).toEqual([connect]);
   });
 
@@ -44,13 +45,13 @@ describe('background script', () => {
     alarmListener?.({ name: RECONNECT_ALARM });
     alarmListener?.({ name: RECONNECT_ALARM });
     expect(connect).toHaveBeenCalledTimes(3);
-    expect(onMessage.listeners).toHaveLength(1);
+    expect(onMessage.listeners).toHaveLength(2);
   });
 
   it('ignores other alarms', () => {
     const [alarmListener] = onAlarm.listeners;
     alarmListener?.({ name: 'something-else' });
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(onMessage.listeners).toHaveLength(1);
+    expect(onMessage.listeners).toHaveLength(2);
   });
 });

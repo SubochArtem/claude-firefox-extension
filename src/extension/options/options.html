@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Claude Firefox Extension: options</title>
+    <style>
+      body {
+        font: 14px/1.4 system-ui, sans-serif;
+        margin: 0;
+        padding: 16px;
+        color: #15141a;
+      }
+      h2 {
+        font-size: 15px;
+        margin: 0 0 8px;
+      }
+      section {
+        margin-bottom: 24px;
+      }
+      label {
+        display: block;
+        margin: 6px 0;
+      }
+      .hint {
+        color: #5b5b66;
+        margin: 2px 0 0 24px;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 4px 8px 4px 0;
+        border-bottom: 1px solid #e0e0e6;
+      }
+      td.site {
+        font-family: ui-monospace, monospace;
+        word-break: break-all;
+      }
+      button {
+        font: inherit;
+      }
+      [hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <section>
+      <h2>Agent tabs</h2>
+      <label><input type="radio" name="agentTabs" value="container" /> Claude container (recommended)</label>
+      <p class="hint">Tabs opened by Claude use a separate "Claude" container with its own cookies and logins.</p>
+      <label><input type="radio" name="agentTabs" value="default" /> Normal profile</label>
+      <p class="hint">Tabs opened by Claude share your cookies and logins, so Claude acts as you on signed-in sites.</p>
+    </section>
+    <section>
+      <h2>Site permissions</h2>
+      <p id="empty" hidden>No site permissions are stored.</p>
+      <table id="permissions" hidden>
+        <thead>
+          <tr>
+            <th>Site</th>
+            <th>Decision</th>
+            <th>Duration</th>
+            <th>Created</th>
+            <th>Last used</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="permission-rows"></tbody>
+      </table>
+    </section>
+    <p id="status"></p>
+    <script src="options.js"></script>
+  </body>
+</html>
