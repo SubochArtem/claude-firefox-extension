@@ -27,6 +27,8 @@ export function permissionActionForTool(tool: string, args: unknown): Permission
     case 'get_page_text':
     case 'find':
       return 'read_page_content';
+    case 'form_input':
+      return 'type';
     default:
       return undefined;
   }

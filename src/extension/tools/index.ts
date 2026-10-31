@@ -4,6 +4,7 @@ import { approvalPromptFor } from '../permissions/site-access';
 import type { ContentBlock, ToolRequest, ToolResponse } from '../protocol';
 import { computer } from './computer';
 import { findTool } from './find';
+import { formInputTool } from './form-input';
 import { navigate } from './navigate';
 import { getPageText } from './page-text';
 import { readPage } from './read-page';
@@ -22,6 +23,7 @@ const tools = new Map<string, ToolHandler>([
   ['read_page', readPage],
   ['get_page_text', getPageText],
   ['find', findTool],
+  ['form_input', formInputTool],
 ]);
 
 function errorResponse(id: string, text: string): ToolResponse {
