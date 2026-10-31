@@ -703,6 +703,26 @@ async function main() {
     }
   });
 
+  await step('get_page_text of a background tab through the MCP server', async () => {
+    const client = mcpClient;
+    check(client !== undefined, 'no MCP client');
+    const created = await client.callTool({ name: 'tabs_create', arguments: { url: pageUrl } });
+    const createdText = resultText(created);
+    const tabId = Number(/^Created tab (\d+) /.exec(createdText)?.[1]);
+    check(!created.isError && Number.isInteger(tabId), `tabs_create failed: ${createdText}`);
+    try {
+      const result = await client.callTool({ name: 'get_page_text', arguments: { tabId } });
+      const text = resultText(result);
+      check(!result.isError, `get_page_text failed: ${text}`);
+      const header = `Title: ${PAGE_TITLE}\nURL: ${pageUrl}\nSource element: <body>\n---\n`;
+      check(text.startsWith(header), `get_page_text has an unexpected header: ${text}`);
+      check(text.slice(header.length).includes(PAGE_BUTTON), `get_page_text has no button text: ${text}`);
+      return `${text.length - header.length} characters`;
+    } finally {
+      await client.callTool({ name: 'tabs_close', arguments: { tabId } });
+    }
+  });
+
   await step('a tool request without the handshake is closed unanswered', async () => {
     const info = readBridgeJson(infoPath);
     check(info !== undefined, 'bridge.json disappeared');

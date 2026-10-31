@@ -86,7 +86,7 @@ src/                   npm package root; every command is run from here
   tsconfig.json        type check for build scripts, their tests, web-ext and Vitest config (Node types, no DOM)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
   vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), scripts
-  scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js) into dist/extension and host/ into dist/host
+  scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js and page/page-text.js) into dist/extension and host/ into dist/host
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
@@ -107,6 +107,9 @@ src/                   npm package root; every command is run from here
       accessibility-tree.ts  tree builder: visibility, filters, depth, element cap, max chars, ref_id subtree
       read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page entry point once per document
       read-page-api.ts  entry point name, script path and result types shared with the tool
+      main-text.ts     page text: content root selection, whitespace normalisation, truncation
+      page-text.ts     entry of the injected bundle dist/extension/page/page-text.js: installs the get_page_text entry point once per document
+      page-text-api.ts  entry point name, script path and result types shared with the tool
     permissions/       site permissions: model, storage, enforcement gate, approval prompt
       actions.ts       permission action types and the mapping from tool calls
       site.ts          http(s)-only URL to host normalization, host and wildcard matching
@@ -127,7 +130,10 @@ src/                   npm package root; every command is run from here
       tabs.ts          tabs_create and tabs_close tools
       computer.ts      computer tool, actions screenshot and zoom: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
       read-page-input.ts  pure argument validation for read_page
-      read-page.ts     read_page tool: site gate, injects the page bundle only when missing, restricted page and timeout errors
+      read-page.ts     read_page tool: options, result check and output on top of page-script.ts
+      page-script.ts   shared runner for page bundles: site gate, landed-site re-checks, injects the bundle only when missing, restricted page and timeout errors
+      page-text-input.ts  pure argument validation for get_page_text
+      page-text.ts     get_page_text tool: title, URL, source element and text of the page
       tab-access.ts    shared tab helpers for page tools: resolve the target tab, restricted domains, permission and restricted page messages
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point

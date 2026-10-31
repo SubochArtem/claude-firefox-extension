@@ -3,7 +3,8 @@ import { READ_PAGE_ENTRY, READ_PAGE_SCRIPT, type ReadPageEntry, type ReadPageRes
 import type { ApprovalPrompt } from '../permissions/approval';
 import { executeTool } from '../tools';
 import { permissionMessage } from '../tools/tab-access';
-import { pageChangedMessage, READ_PAGE_TIMEOUT_MS, readPage, stillLoadingMessage } from '../tools/read-page';
+import { PAGE_SCRIPT_TIMEOUT_MS, pageChangedMessage, stillLoadingMessage } from '../tools/page-script';
+import { readPage } from '../tools/read-page';
 import { mockBrowser } from './browser-mock';
 
 const TAB = 5;
@@ -162,8 +163,8 @@ describe('read_page: injection', () => {
     try {
       browserMock.scripting.executeScript.mockImplementation(() => new Promise(() => {}));
       const response = run();
-      await vi.advanceTimersByTimeAsync(READ_PAGE_TIMEOUT_MS);
-      expect(await response).toMatchObject({ error: { content: [{ type: 'text', text: stillLoadingMessage(TAB) }] } });
+      await vi.advanceTimersByTimeAsync(PAGE_SCRIPT_TIMEOUT_MS);
+      expect(await response).toMatchObject({ error: { content: [{ type: 'text', text: stillLoadingMessage('read_page', TAB) }] } });
     } finally {
       vi.useRealTimers();
     }
@@ -245,7 +246,7 @@ describe('read_page: site permission', () => {
         return { kind: 'answered' as const, answer: 'allow_once' as const, wildcard: false };
       }),
     };
-    await expect(readPage({}, prompt)).rejects.toThrow(pageChangedMessage(TAB, 'new.example'));
+    await expect(readPage({}, prompt)).rejects.toThrow(pageChangedMessage('read_page', TAB, 'new.example'));
     expect(browserMock.scripting.executeScript).not.toHaveBeenCalled();
   });
 
@@ -254,7 +255,7 @@ describe('read_page: site permission', () => {
       tabs.set(TAB, { id: TAB, windowId: 1, url: 'https://other.example/', active: true });
       return runInjection(injection);
     });
-    expect(await failure()).toBe(pageChangedMessage(TAB, 'example.com'));
+    expect(await failure()).toBe(pageChangedMessage('read_page', TAB, 'example.com'));
   });
 
   it('reports a tab closed during the read', async () => {
