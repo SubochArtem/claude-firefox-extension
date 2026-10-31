@@ -5,6 +5,7 @@ import {
   isSensitive,
   isShownInTree,
   MAX_DOM_DEPTH,
+  rawAccessibleName,
   SKIPPED_TAGS,
   type ShownCheck,
 } from './accessible-name';
@@ -22,6 +23,13 @@ export interface TreeOptions {
 }
 
 export type TreeResult = { ok: true; tree: string } | { ok: false; error: string };
+
+export interface TreeElement {
+  element: Element;
+  role: string;
+  // Collapsed whitespace only; format it with formatText before printing.
+  name: () => string;
+}
 
 export const DEFAULT_DEPTH = 15;
 export const DEFAULT_MAX_CHARS = 50_000;
@@ -159,14 +167,22 @@ function isRendered(element: Element, shown: ShownCheck): boolean {
   return !SKIPPED_TAGS.has(element.localName) && shown(element);
 }
 
+// Options are printed with their select, never walked as elements.
+function treeChildren(element: Element): Element[] {
+  if (element.localName === 'select') return [];
+  return [...(element.shadowRoot?.children ?? []), ...element.children];
+}
+
+function treeRoot(doc: Document, shown: ShownCheck): Element | undefined {
+  const root = doc.body ?? doc.documentElement;
+  return root && isShownInTree(root, shown) ? root : undefined;
+}
+
 function hasIncludedElement(element: Element, domDepth: number, state: WalkState): boolean {
   if (domDepth >= MAX_DOM_DEPTH || !isRendered(element, state.shown)) return false;
   const role = elementRole(element);
   if (isIncluded(element, role, () => accessibleName(element, role, state.shown), state.filter)) return true;
-  if (element.localName === 'select') return false;
-  for (const child of element.shadowRoot?.children ?? []) if (hasIncludedElement(child, domDepth + 1, state)) return true;
-  for (const child of element.children) if (hasIncludedElement(child, domDepth + 1, state)) return true;
-  return false;
+  return treeChildren(element).some((child) => hasIncludedElement(child, domDepth + 1, state));
 }
 
 function visit(element: Element, level: number, domDepth: number, state: WalkState): void {
@@ -187,12 +203,11 @@ function visit(element: Element, level: number, domDepth: number, state: WalkSta
     }
     emit(element, role, getName(), level, state);
   }
-  if (element.localName !== 'select') visitChildren(element, included ? level + 1 : level, domDepth + 1, state);
+  visitChildren(element, included ? level + 1 : level, domDepth + 1, state);
 }
 
 function visitChildren(element: Element, level: number, domDepth: number, state: WalkState): void {
-  for (const child of element.shadowRoot?.children ?? []) visit(child, level, domDepth, state);
-  for (const child of element.children) visit(child, level, domDepth, state);
+  for (const child of treeChildren(element)) visit(child, level, domDepth, state);
 }
 
 function limitChars(text: string, maxChars: number): string {
@@ -211,8 +226,8 @@ function refError(refId: string, reason: string): TreeResult {
 
 function walkRoot(doc: Document, refId: string | undefined, state: WalkState): TreeResult | undefined {
   if (refId === undefined) {
-    const root = doc.body ?? doc.documentElement;
-    if (root && isShownInTree(root, state.shown)) visitChildren(root, 0, 0, state);
+    const root = treeRoot(doc, state.shown);
+    if (root) visitChildren(root, 0, 0, state);
     return undefined;
   }
   const resolution = state.registry.resolve(refId);
@@ -224,7 +239,7 @@ function walkRoot(doc: Document, refId: string | undefined, state: WalkState): T
   }
   const role = elementRole(root);
   emit(root, role, accessibleName(root, role, state.shown), 0, state);
-  if (root.localName !== 'select') visitChildren(root, 1, 0, state);
+  visitChildren(root, 1, 0, state);
   return undefined;
 }
 
@@ -251,4 +266,30 @@ export function buildAccessibilityTree(doc: Document, registry: RefRegistry, opt
     state.lines.push(`[output stopped at ${MAX_ELEMENTS} elements. Pass a ref_id or a smaller depth to focus.]`);
   }
   return { ok: true, tree: limitChars(state.lines.join('\n'), options.maxChars ?? DEFAULT_MAX_CHARS) };
+}
+
+function walkElements(
+  element: Element,
+  domDepth: number,
+  shown: ShownCheck,
+  callback: (node: TreeElement) => boolean,
+): boolean {
+  if (domDepth >= MAX_DOM_DEPTH || !isRendered(element, shown)) return true;
+  const role = elementRole(element);
+  let name: string | undefined;
+  const getName = (): string => (name ??= rawAccessibleName(element, role, shown));
+  if (isIncluded(element, role, getName, 'all') && !callback({ element, role, name: getName })) return false;
+  return treeChildren(element).every((child) => walkElements(child, domDepth + 1, shown, callback));
+}
+
+// Calls back, in document order, for every element read_page prints with filter "all" at any depth,
+// until the callback returns false.
+export function forEachTreeElement(
+  doc: Document,
+  callback: (node: TreeElement) => boolean,
+  isVisible: (element: Element) => boolean = isElementVisible,
+): void {
+  const shown = shownCheck(isVisible);
+  const root = treeRoot(doc, shown);
+  if (root) treeChildren(root).every((child) => walkElements(child, 0, shown, callback));
 }

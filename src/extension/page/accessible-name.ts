@@ -102,7 +102,7 @@ function shownText(element: Element, shown: ShownCheck, skip?: (element: Element
   return isShownInTree(element, shown) ? visibleText(element, shown, skip) : '';
 }
 
-function directText(element: Element): string {
+export function directText(element: Element): string {
   let text = '';
   for (const child of element.childNodes) {
     if (child.nodeType === TEXT_NODE) text += child.textContent ?? '';
@@ -154,7 +154,8 @@ function captionText(element: Element, shown: ShownCheck): string | undefined {
   return caption ? shownText(caption, shown) : undefined;
 }
 
-export function accessibleName(element: Element, role: string, shown: ShownCheck): string {
+// The name with whitespace collapsed but neither clipped nor quote-escaped, for matching.
+export function rawAccessibleName(element: Element, role: string, shown: ShownCheck): string {
   const isTextarea = element.localName === 'textarea';
   const sources: Array<() => string | null | undefined> = [
     () => labelledByText(element, shown),
@@ -170,10 +171,14 @@ export function accessibleName(element: Element, role: string, shown: ShownCheck
   ];
   for (const source of sources) {
     const text = collapseWhitespace(source() ?? '');
-    if (text) return formatText(text);
+    if (text) return text;
   }
   // A textarea's text content is its default value, which may be sensitive.
   if (isTextarea) return '';
   const direct = collapseWhitespace(directText(element));
-  return direct.length >= MIN_DIRECT_TEXT_LENGTH ? formatText(direct) : '';
+  return direct.length >= MIN_DIRECT_TEXT_LENGTH ? direct : '';
+}
+
+export function accessibleName(element: Element, role: string, shown: ShownCheck): string {
+  return formatText(rawAccessibleName(element, role, shown));
 }

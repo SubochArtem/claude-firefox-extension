@@ -65,7 +65,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
 - [x] `feature/screenshot`: screenshots and zoom via `tabs.captureTab`.
 - [x] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); user choice between a dedicated agent container (`contextualIdentities`, isolated cookies and logins) and the normal profile, with default, switch location and per-domain mixing decided at the start; design after researching how Claude in Chrome does it.
-- [ ] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
+- [x] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
 - [ ] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
 - [ ] `feature/devtools-tools`: `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`.
 - [ ] `feature/sidebar-chat`: chat in a Firefox sidebar; options decided at its start after checking Anthropic's terms: a sidebar that talks to the user's local Claude Code through the native host (user signs in to Claude Code as usual), or direct Anthropic API calls with the user's API key. Signing in to claude.ai from the extension like Claude in Chrome is not available to third parties.
@@ -104,8 +104,10 @@ src/                   npm package root; every command is run from here
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
       element-role.ts  role from the role attribute or the tag, interactive check, heading level
       accessible-name.ts  accessible name, visible text, sensitive field check, text clipping and quote escaping
-      accessibility-tree.ts  tree builder: visibility, filters, depth, element cap, max chars, ref_id subtree
-      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page entry point once per document
+      accessibility-tree.ts  tree builder: visibility, filters, depth, element cap, max chars, ref_id subtree; walker of the tree's elements for find
+      find-elements.ts  find search: query words and role words, scoring tiers, top 20 lines with refs
+      find-api.ts      find entry point name and result types shared with the tool
+      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page and find entry points once per document, sharing one ref registry
       read-page-api.ts  entry point name, script path and result types shared with the tool
       main-text.ts     page text: content root selection, whitespace normalisation, truncation
       page-text.ts     entry of the injected bundle dist/extension/page/page-text.js: installs the get_page_text entry point once per document
@@ -134,6 +136,8 @@ src/                   npm package root; every command is run from here
       page-script.ts   shared runner for page bundles: site gate, landed-site re-checks, injects the bundle only when missing, restricted page and timeout errors
       page-text-input.ts  pure argument validation for get_page_text
       page-text.ts     get_page_text tool: title, URL, source element and text of the page
+      find-input.ts    pure argument validation for find
+      find.ts          find tool: runs the find entry point of the read_page bundle on top of page-script.ts
       tab-access.ts    shared tab helpers for page tools: resolve the target tab, restricted domains, permission and restricted page messages
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point

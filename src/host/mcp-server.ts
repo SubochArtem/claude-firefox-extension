@@ -272,6 +272,15 @@ export const pageTextInputSchema = z.strictObject({
     .describe('Maximum length of the text in characters (default 50000); longer text is cut at a line break with a note'),
 });
 
+export const findInputSchema = z.strictObject({
+  query: z
+    .string()
+    .min(1)
+    .max(500)
+    .describe('What to look for, in plain words: a name, label, placeholder or text, optionally with a role, e.g. "login button" or "search box"'),
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -400,6 +409,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: pageTextInputSchema,
     },
     forward('get_page_text'),
+  );
+
+  server.registerTool(
+    'find',
+    {
+      description:
+        'Find elements on a page by a natural-language-ish description, using local text matching over the page\'s accessibility tree (the elements read_page shows); no model is involved. Matches the words of the query against each element\'s name, role (words like button, link, checkbox, heading, search box), placeholder, id, title, alt, href, type, name attribute and text, case-insensitively. Returns up to 20 best matches, best first, as lines "- ref_N: role "name" (type) - reason"; the refs are the same as read_page\'s, usable with read_page ref_id and other tools until the page is reloaded or navigates. Hidden elements are left out and field values are never searched or shown. Defaults to the active tab; get other tab ids from tabs_context.',
+      inputSchema: findInputSchema,
+    },
+    forward('find'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the
