@@ -6,7 +6,9 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { NATIVE_HOST_NAME as EXTENSION_HOST_NAME } from '../../extension/protocol';
+import { BIDI_PORT_ENV, DEFAULT_BIDI_PORT } from '../../host/bidi-client';
 import { NATIVE_HOST_NAME } from '../../host/protocol';
+import { remoteDebuggingNote } from '../install-host-lib.mjs';
 
 const run = promisify(execFile);
 const scriptsDir = fileURLToPath(new URL('..', import.meta.url));
@@ -28,7 +30,7 @@ let layout: Layout;
 
 // The installer resolves dist/host/index.js relative to its own location, so a copy inside a temp
 // package directory installs a fake build. The quote and space in the path exercise shell quoting.
-beforeEach(async () => {
+async function createLayout(): Promise<void> {
   const base = await mkdtemp('/tmp/cfe-');
   onTestFinished(() => rm(base, { recursive: true, force: true }));
   const packageDir = join(base, "it's a pkg");
@@ -45,7 +47,7 @@ beforeEach(async () => {
       await copyFile(join(scriptsDir, name), join(packageDir, 'scripts', name));
     }
   }
-});
+}
 
 async function writeFakeBuild(): Promise<void> {
   await mkdir(join(layout.packageDir, 'dist/host'), { recursive: true });
@@ -67,6 +69,8 @@ function manifestPath(): string {
 }
 
 describe.runIf(process.platform === 'linux')('install-host', () => {
+  beforeEach(createLayout);
+
   it('writes the native messaging manifest', async () => {
     await writeFakeBuild();
     await runInstaller();
@@ -139,6 +143,13 @@ describe.runIf(process.platform === 'linux')('install-host', () => {
     expect(stdout).toContain(`claude mcp add firefox -- '${process.execPath}' ${quotedEntry} --mcp`);
   });
 
+  it('prints how to start Firefox with WebDriver BiDi', async () => {
+    await writeFakeBuild();
+    const { stdout } = await runInstaller();
+    expect(stdout).toContain('--remote-debugging-port=9222');
+    expect(stdout).toContain(BIDI_PORT_ENV);
+  });
+
   it('fails with a clear error and writes nothing when the host is not built', async () => {
     const result = runInstaller();
     await expect(result).rejects.toMatchObject({
@@ -172,5 +183,17 @@ describe.runIf(process.platform === 'linux')('install-host', () => {
     await expect(runInstaller(['--uninstall'])).resolves.toMatchObject({
       stdout: expect.stringContaining('Removed the native messaging host:'),
     });
+  });
+});
+
+describe('remoteDebuggingNote', () => {
+  it.each([
+    ['linux', 'firefox --remote-debugging-port='],
+    ['darwin', '/Applications/Firefox.app/Contents/MacOS/firefox --remote-debugging-port='],
+    ['win32', '"C:\\Program Files\\Mozilla Firefox\\firefox.exe" --remote-debugging-port='],
+  ] as const)('names the default port, the %s command and the port variable', (platform, command) => {
+    const note = remoteDebuggingNote(platform).join('\n');
+    expect(note).toContain(`  ${command}${DEFAULT_BIDI_PORT}`);
+    expect(note).toContain(BIDI_PORT_ENV);
   });
 });

@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import {
   execFileRunner,
   installWindows,
+  remoteDebuggingNote,
   uninstallWindows,
   windowsInstallPaths,
   windowsMcpAddHint,
@@ -44,6 +45,8 @@ if (process.platform === 'win32') {
       console.log('');
       console.log('Register the MCP server with Claude Code:');
       console.log(`  ${windowsMcpAddHint(process.execPath, hostEntry)}`);
+      console.log('');
+      for (const line of remoteDebuggingNote(process.platform)) console.log(line);
       for (const warning of windowsPathWarnings(paths.dir)) console.error(`\n${warning}`);
     }
   } catch (error) {
@@ -126,3 +129,5 @@ console.log('Snap and Flatpak builds of Firefox are not supported: their sandbox
 console.log('');
 console.log('Register the MCP server with Claude Code:');
 console.log(`  claude mcp add firefox -- ${shellQuote(process.execPath)} ${shellQuote(hostEntry)} --mcp`);
+console.log('');
+for (const line of remoteDebuggingNote(process.platform)) console.log(line);

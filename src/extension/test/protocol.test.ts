@@ -37,6 +37,29 @@ describe('parseHostMessage', () => {
     });
   });
 
+  it('accepts a bidi input response and settles a malformed one as an error', () => {
+    expect(parseHostMessage({ type: 'bidi_input_response', requestId: 'r', ok: true, x: 1 })).toEqual({
+      type: 'bidi_input_response',
+      requestId: 'r',
+      ok: true,
+    });
+    expect(parseHostMessage({ type: 'bidi_input_response', requestId: 'r', ok: false, error: 'no tab' })).toEqual({
+      type: 'bidi_input_response',
+      requestId: 'r',
+      ok: false,
+      error: 'no tab',
+    });
+    for (const malformed of [{ ok: false }, { ok: 'yes' }, { ok: false, error: 1 }]) {
+      expect(parseHostMessage({ type: 'bidi_input_response', requestId: 'r', ...malformed })).toEqual({
+        type: 'bidi_input_response',
+        requestId: 'r',
+        ok: false,
+        error: 'The native host sent a malformed input response',
+      });
+    }
+    expect(parseHostMessage({ type: 'bidi_input_response', ok: true })).toBeUndefined();
+  });
+
   it.each([
     ['undefined', undefined],
     ['a permission response without a requestId', { type: 'permission_response', answer: 'deny' }],
