@@ -133,6 +133,8 @@ src/                   npm package root; every command is run from here
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
       computer.ts      computer tool, actions screenshot and zoom: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
+      input-keys.ts    key text parsing: WebDriver key values, chords and modifier aliases, typed text to key values, page zoom and reload shortcut detection
+      input-actions.ts  WebDriver BiDi input.performActions sources for key, type, click, hover, drag and scroll, modifiers held tick-aligned with the pointer
       read-page-input.ts  pure argument validation for read_page
       read-page.ts     read_page tool: options, result check and output on top of page-script.ts
       page-script.ts   shared runner for page bundles: site gate for the tool's action, landed-site re-checks, injects the bundle only when missing, restricted page and timeout errors
