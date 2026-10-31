@@ -145,9 +145,11 @@ describe('accessible name', () => {
   });
 
   it('uses legend, figcaption and caption', () => {
-    expect(tree('<fieldset><legend>Shipping</legend></fieldset>', { depth: 1 })).toBe('generic "Shipping" [ref_1]');
-    expect(tree('<figure><figcaption>Chart</figcaption></figure>', { depth: 1 })).toBe('generic "Chart" [ref_1]');
-    expect(tree('<table><caption>Prices</caption></table>', { depth: 1 })).toBe('table "Prices" [ref_1]');
+    expect(tree('<fieldset><legend>Shipping</legend></fieldset>', { depth: 1 }).split('\n')[0]).toBe(
+      'generic "Shipping" [ref_1]',
+    );
+    expect(tree('<figure><figcaption>Chart</figcaption></figure>', { depth: 1 }).split('\n')[0]).toBe('generic "Chart" [ref_1]');
+    expect(tree('<table><caption>Prices</caption></table>', { depth: 1 }).split('\n')[0]).toBe('table "Prices" [ref_1]');
   });
 
   it('uses direct text of at least three characters for other elements', () => {
@@ -394,7 +396,32 @@ describe('ref_id visibility', () => {
 
 describe('limits', () => {
   it('stops at the given depth of included levels', () => {
-    expect(tree('<ul><li><ul><li>Deep</li></ul></li></ul>', { depth: 2 })).toBe('list [ref_1]\n listitem [ref_2]');
+    expect(tree('<ul><li><ul><li>Deep</li></ul></li></ul>', { depth: 2 })).toBe(
+      'list [ref_1]\n listitem [ref_2]\n' +
+        '[deeper levels omitted at depth 2. Pass a larger depth or a ref_id to see them.]',
+    );
+  });
+
+  it('notes hidden levels below a ref_id root', () => {
+    const registry = new RefRegistry();
+    tree('<nav><ul><li>Item</li></ul></nav>', {}, registry);
+    const result = buildAccessibilityTree(document, registry, { isVisible: visible, refId: 'ref_1', depth: 1 });
+    expect(result).toEqual({
+      ok: true,
+      tree: 'navigation [ref_1]\n[deeper levels omitted at depth 1. Pass a larger depth or a ref_id to see them.]',
+    });
+  });
+
+  it('adds no depth note when nothing included lies below the depth', () => {
+    expect(tree('<ul><li><div><span></span><b data-hidden>x</b></div></li></ul>', { depth: 2 })).toBe(
+      'list [ref_1]\n listitem [ref_2]',
+    );
+  });
+
+  it('counts only elements kept by the filter for the depth note', () => {
+    const html = '<nav><button>Go</button><ul><li>Text</li></ul></nav>';
+    expect(tree(html, { filter: 'interactive', depth: 1 })).toBe('button "Go" [ref_1]');
+    expect(tree('<nav><div><button>Go</button></div></nav>', { depth: 1 })).toMatch(/^navigation \[ref_1\]\n\[deeper levels omitted at depth 1\./);
   });
 
   it('cuts the output at the last newline before maxChars', () => {

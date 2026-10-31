@@ -4,6 +4,7 @@ import { approvalPromptFor } from '../permissions/site-access';
 import type { ContentBlock, ToolRequest, ToolResponse } from '../protocol';
 import { computer } from './computer';
 import { navigate } from './navigate';
+import { readPage } from './read-page';
 import { tabsClose, tabsCreate } from './tabs';
 import { tabsContext } from './tabs-context';
 import { ToolError } from './tool-error';
@@ -16,6 +17,7 @@ const tools = new Map<string, ToolHandler>([
   ['tabs_create', tabsCreate],
   ['tabs_close', tabsClose],
   ['computer', computer],
+  ['read_page', readPage],
 ]);
 
 function errorResponse(id: string, text: string): ToolResponse {

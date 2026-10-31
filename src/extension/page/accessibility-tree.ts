@@ -39,6 +39,7 @@ interface WalkState {
   lines: string[];
   count: number;
   capped: boolean;
+  depthCut: boolean;
 }
 
 export function isElementVisible(element: Element): boolean {
@@ -158,8 +159,22 @@ function isRendered(element: Element, shown: ShownCheck): boolean {
   return !SKIPPED_TAGS.has(element.localName) && shown(element);
 }
 
+function hasIncludedElement(element: Element, domDepth: number, state: WalkState): boolean {
+  if (domDepth >= MAX_DOM_DEPTH || !isRendered(element, state.shown)) return false;
+  const role = elementRole(element);
+  if (isIncluded(element, role, () => accessibleName(element, role, state.shown), state.filter)) return true;
+  if (element.localName === 'select') return false;
+  for (const child of element.shadowRoot?.children ?? []) if (hasIncludedElement(child, domDepth + 1, state)) return true;
+  for (const child of element.children) if (hasIncludedElement(child, domDepth + 1, state)) return true;
+  return false;
+}
+
 function visit(element: Element, level: number, domDepth: number, state: WalkState): void {
-  if (state.capped || level >= state.maxDepth || domDepth >= MAX_DOM_DEPTH) return;
+  if (state.capped || domDepth >= MAX_DOM_DEPTH) return;
+  if (level >= state.maxDepth) {
+    state.depthCut ||= hasIncludedElement(element, domDepth, state);
+    return;
+  }
   if (!isRendered(element, state.shown)) return;
   const role = elementRole(element);
   let name: string | undefined;
@@ -222,10 +237,16 @@ export function buildAccessibilityTree(doc: Document, registry: RefRegistry, opt
     lines: [],
     count: 0,
     capped: false,
+    depthCut: false,
   };
   const failure = walkRoot(doc, options.refId, state);
   registry.sweep();
   if (failure) return failure;
+  if (state.depthCut) {
+    state.lines.push(
+      `[deeper levels omitted at depth ${state.maxDepth}. Pass a larger depth or a ref_id to see them.]`,
+    );
+  }
   if (state.capped) {
     state.lines.push(`[output stopped at ${MAX_ELEMENTS} elements. Pass a ref_id or a smaller depth to focus.]`);
   }
