@@ -61,6 +61,16 @@ async function askUser(request: SiteAccessRequest, host: string, prompt: Approva
   return host;
 }
 
+export interface ApprovalChoice {
+  viaClient: boolean;
+  clientPrompt: ApprovalPrompt;
+}
+
+// The MCP server flags a call when its client can ask the user; every other call uses the popup.
+export function approvalPromptFor(choice: ApprovalChoice | undefined): ApprovalPrompt {
+  return choice?.viaClient === true ? choice.clientPrompt : popupApprovalPrompt;
+}
+
 // Resolves with the host the tool may act on, asking the user when no stored decision covers it.
 export function requireSiteAccess(request: SiteAccessRequest, prompt: ApprovalPrompt = popupApprovalPrompt): Promise<string> {
   return checkOrPrompt(request, prompt, true);

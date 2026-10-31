@@ -263,6 +263,98 @@ describe('native host process', () => {
   });
 });
 
+function permissionRequest(callId: unknown, requestId = 'req-1'): Record<string, unknown> {
+  return {
+    type: 'permission_request',
+    requestId,
+    callId,
+    host: 'example.com',
+    tool: 'navigate',
+    action: 'navigate',
+    canIncludeSubdomains: true,
+  };
+}
+
+function permissionResponses(host: FakeExtension): unknown[] {
+  return host.received.filter((message) => (message as { type: string }).type === 'permission_response');
+}
+
+const DENY = (requestId: string) => ({ type: 'permission_response', requestId, answer: 'deny', includeSubdomains: false });
+
+describe('native host permission requests', () => {
+  it('forwards approvalViaClient and routes a permission request to the client that owns the call and back', async () => {
+    const host = await startHost(await tempDir());
+    const [owner, other] = await Promise.all([connectClient(host), connectClient(host)]);
+    owner.send({ type: 'tool_request', id: '1', tool: 'navigate', args: {}, approvalViaClient: true });
+    const call = await host.nextRequest();
+    expect(call).toEqual({ type: 'tool_request', id: expect.stringMatching(/^\d+:1$/), tool: 'navigate', args: {}, approvalViaClient: true });
+    other.send({ type: 'tool_request', id: '1', tool: 'navigate', args: {} });
+    await host.nextRequest();
+
+    host.send(permissionRequest(call['id']));
+    expect(await owner.nextLine()).toEqual(permissionRequest('1'));
+
+    // Only the owner may answer; another client's answer for the same request is dropped.
+    other.send({ type: 'permission_response', requestId: 'req-1', answer: 'allow_always', includeSubdomains: true });
+    await host.waitForStderr(/permission response for unknown request req-1/);
+    owner.send({ type: 'permission_response', requestId: 'req-1', answer: 'allow_once', includeSubdomains: false });
+    await waitFor(() =>
+      expect(permissionResponses(host)).toEqual([
+        { type: 'permission_response', requestId: 'req-1', answer: 'allow_once', includeSubdomains: false },
+      ]),
+    );
+    // Answered once: a second answer is dropped as well.
+    owner.send({ type: 'permission_response', requestId: 'req-1', answer: 'deny', includeSubdomains: false });
+    host.send(textResult(call['id'], 'done'));
+    expect(await owner.nextLine()).toEqual(textResult('1', 'done'));
+    expect(permissionResponses(host)).toHaveLength(1);
+    expect(other.lines).toEqual([]);
+  });
+
+  it('denies a permission request for an unknown call at once', async () => {
+    const host = await startHost(await tempDir());
+    const client = await connectClient(host);
+    host.send(permissionRequest('9:9', 'orphan'));
+    await waitFor(() => expect(permissionResponses(host)).toEqual([DENY('orphan')]));
+    expect(client.lines).toEqual([]);
+  });
+
+  it('denies the pending permission requests of a client that disconnects', async () => {
+    const host = await startHost(await tempDir());
+    const client = await connectClient(host);
+    client.send({ type: 'tool_request', id: '1', tool: 'navigate', args: {}, approvalViaClient: true });
+    const call = await host.nextRequest();
+    host.send(permissionRequest(call['id'], 'a'));
+    host.send(permissionRequest(call['id'], 'b'));
+    await waitFor(() => expect(client.lines).toHaveLength(2));
+    expect(permissionResponses(host)).toEqual([]);
+
+    client.socket.destroy();
+    await waitFor(() => expect(permissionResponses(host)).toEqual(expect.arrayContaining([DENY('a'), DENY('b')])));
+    expect(permissionResponses(host)).toHaveLength(2);
+    // The call is gone with its client, so a request for it is denied at once.
+    host.send(permissionRequest(call['id'], 'c'));
+    await waitFor(() => expect(permissionResponses(host)).toContainEqual(DENY('c')));
+  });
+
+  it('passes a malformed answer on as a deny and ignores invalid permission messages', async () => {
+    const host = await startHost(await tempDir());
+    const client = await connectClient(host);
+    client.send({ type: 'tool_request', id: '1', tool: 'navigate', args: {}, approvalViaClient: true });
+    const call = await host.nextRequest();
+    host.send({ ...permissionRequest(call['id']), canIncludeSubdomains: 'yes' });
+    await host.waitForStderr(/extension sent an invalid message/);
+    expect(client.lines).toEqual([]);
+
+    host.send(permissionRequest(call['id']));
+    await client.nextLine();
+    client.send({ type: 'permission_response', requestId: 42, answer: 'allow_once' });
+    await host.waitForStderr(/client \d+ sent an invalid message/);
+    client.send({ type: 'permission_response', requestId: 'req-1', answer: { allow: true } });
+    await waitFor(() => expect(permissionResponses(host)).toEqual([DENY('req-1')]));
+  });
+});
+
 // Socket files, their permissions and the directory checks only exist on Linux and macOS; Windows
 // cannot deliver SIGTERM to a handler (kill() terminates the process), and its second-host check has
 // its own tests below.

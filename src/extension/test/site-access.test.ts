@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalDecision, ApprovalPrompt, ApprovalRequest } from '../permissions/approval';
 import type { PermissionRecord } from '../permissions/permission-model';
 import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
+import { popupApprovalPrompt } from '../permissions/popup-prompt';
 import {
+  approvalPromptFor,
   blockedMessage,
   deniedMessage,
   landedSite,
@@ -202,5 +204,18 @@ describe('landedSite', () => {
 
   it.each(['about:blank', undefined])('reports %j as outside site permissions', async (url) => {
     expect(await landedSite(url, 'example.com')).toEqual({ allowed: false, host: undefined });
+  });
+});
+
+describe('approvalPromptFor', () => {
+  const clientPrompt: ApprovalPrompt = { requestApproval: vi.fn() };
+
+  it('asks through the MCP client only when the call is flagged for it', () => {
+    expect(approvalPromptFor({ viaClient: true, clientPrompt })).toBe(clientPrompt);
+  });
+
+  it('uses the popup otherwise', () => {
+    expect(approvalPromptFor({ viaClient: false, clientPrompt })).toBe(popupApprovalPrompt);
+    expect(approvalPromptFor(undefined)).toBe(popupApprovalPrompt);
   });
 });

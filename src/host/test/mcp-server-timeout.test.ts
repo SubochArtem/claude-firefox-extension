@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RUNTIME_DIR_VAR, sleep, startFakeHost, tempDir, textResult, waitFor } from './helpers';
 
 const MCP_TIMEOUT_MS = 150_000;
+const ELICITATION_TIMEOUT_MS = 120_000;
 const HANDSHAKE_TIMEOUT_MS = 2_000;
 const AUTH_FAILED = /^Authentication with the native host failed/;
 const SIGNALS = ['exit', 'SIGINT', 'SIGTERM'] as const;
 
 // The 150 s timeout cannot be waited for in a child process, so this file runs the MCP server inside
 // the test worker with fake stdio, a stubbed process.exit and fake setTimeout. Sockets stay real.
-async function startInProcessMcp(runtimeDir: string) {
+async function startInProcessMcp(runtimeDir: string, capabilities: Record<string, unknown> = {}) {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const responses: Record<string, unknown>[] = [];
@@ -50,7 +51,7 @@ async function startInProcessMcp(runtimeDir: string) {
       jsonrpc: '2.0',
       id: 0,
       method: 'initialize',
-      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } },
+      params: { protocolVersion: '2025-06-18', capabilities, clientInfo: { name: 't', version: '0' } },
     });
     await response(0);
     send({ jsonrpc: '2.0', method: 'notifications/initialized' });
@@ -113,6 +114,45 @@ describe('MCP server request timeout', () => {
         result: { content: [{ type: 'text', text: 'on time' }] },
       });
       expect(mcp.responses.filter((message) => message['id'] === 1)).toHaveLength(1);
+    } finally {
+      await mcp.stop();
+      await bridge.close();
+    }
+  });
+});
+
+describe('MCP server permission elicitation timeout', () => {
+  it('answers deny once when the user does not answer the elicitation within 120 s', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const runtimeDir = await tempDir();
+    const bridge = await startFakeHost(runtimeDir);
+    const mcp = await startInProcessMcp(runtimeDir, { elicitation: {} });
+    const permissionResponses = () => bridge.requests.filter((message) => message['type'] === 'permission_response');
+    try {
+      mcp.callTabsContext(1);
+      await waitFor(() => expect(bridge.requests).toHaveLength(1));
+      expect(bridge.requests[0]).toMatchObject({ id: '1', approvalViaClient: true });
+      bridge.answer({
+        type: 'permission_request',
+        requestId: 'req-1',
+        callId: '1',
+        host: 'example.com',
+        tool: 'tabs_context',
+        action: 'navigate',
+        canIncludeSubdomains: true,
+      });
+      await waitFor(() => expect(mcp.responses.find((message) => message['method'] === 'elicitation/create')).toBeDefined());
+
+      vi.advanceTimersByTime(ELICITATION_TIMEOUT_MS - 1);
+      await sleep(50);
+      expect(permissionResponses()).toEqual([]);
+      vi.advanceTimersByTime(1);
+      await waitFor(() =>
+        expect(permissionResponses()).toEqual([
+          { type: 'permission_response', requestId: 'req-1', answer: 'deny', includeSubdomains: false },
+        ]),
+      );
     } finally {
       await mcp.stop();
       await bridge.close();

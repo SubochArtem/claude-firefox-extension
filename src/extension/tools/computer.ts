@@ -1,3 +1,4 @@
+import type { ApprovalPrompt } from '../permissions/approval';
 import { siteForUrl } from '../permissions/site';
 import { requireSiteAccess } from '../permissions/site-access';
 import type { ContentBlock } from '../protocol';
@@ -216,7 +217,7 @@ async function requireSameSite(label: ActionLabel, tabId: number, host: string):
   return url;
 }
 
-async function capturableTab(tabId: number | undefined, label: ActionLabel): Promise<CapturableTab> {
+async function capturableTab(tabId: number | undefined, label: ActionLabel, prompt: ApprovalPrompt): Promise<CapturableTab> {
   const tab = await resolveTab(tabId, label);
   const url = tab.url ?? '';
   // Checked before the site permission, so the user is not asked about a page that cannot be captured.
@@ -224,12 +225,15 @@ async function capturableTab(tabId: number | undefined, label: ActionLabel): Pro
   if (!(await browser.permissions.contains({ origins: ['<all_urls>'] }))) {
     throw new ToolError(permissionMessage(label.verb));
   }
-  const host = await requireSiteAccess({
-    url,
-    tool: 'computer',
-    action: 'read_page_content',
-    subject: `Cannot ${label.target} tab ${tab.id} (${url})`,
-  });
+  const host = await requireSiteAccess(
+    {
+      url,
+      tool: 'computer',
+      action: 'read_page_content',
+      subject: `Cannot ${label.target} tab ${tab.id} (${url})`,
+    },
+    prompt,
+  );
   return { tabId: tab.id, url: await requireSameSite(label, tab.id, host), host };
 }
 
@@ -254,8 +258,8 @@ async function capture(
   }
 }
 
-async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
-  const { tabId, url, host } = await capturableTab(args.tabId, SCREENSHOT_LABEL);
+async function screenshot(args: ScreenshotArgs, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
+  const { tabId, url, host } = await capturableTab(args.tabId, SCREENSHOT_LABEL, prompt);
   const viewport = await readViewport(SCREENSHOT_LABEL, tabId, url);
   const scale = args.scale ?? 1;
   const { frame, output } = screenshotSize(viewport, scale);
@@ -279,8 +283,8 @@ async function screenshot(args: ScreenshotArgs): Promise<ContentBlock[]> {
 }
 
 // Zoom keeps the last screenshot's coordinate frame, so later actions still use its coordinates.
-async function zoom(args: ZoomArgs): Promise<ContentBlock[]> {
-  const { tabId, url, host } = await capturableTab(args.tabId, ZOOM_LABEL);
+async function zoom(args: ZoomArgs, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
+  const { tabId, url, host } = await capturableTab(args.tabId, ZOOM_LABEL, prompt);
   const { frame } = screenshotFrames.require(tabId);
   const viewport = await readViewport(ZOOM_LABEL, tabId, url);
   const rect = screenshotFrames.regionToViewport(tabId, args.region, viewport);
@@ -308,8 +312,8 @@ async function zoom(args: ZoomArgs): Promise<ContentBlock[]> {
   ];
 }
 
-export async function computer(args: Record<string, unknown>): Promise<ContentBlock[]> {
+export async function computer(args: Record<string, unknown>, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
   const parsed = parseComputerArgs(args);
   if (!parsed.ok) throw new ToolError(`Invalid computer arguments: ${parsed.error}`);
-  return parsed.value.action === 'zoom' ? zoom(parsed.value) : screenshot(parsed.value);
+  return parsed.value.action === 'zoom' ? zoom(parsed.value, prompt) : screenshot(parsed.value, prompt);
 }

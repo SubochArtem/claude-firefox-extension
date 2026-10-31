@@ -1,4 +1,5 @@
 import { resolveAgentContainer } from '../permissions/agent-container';
+import type { ApprovalPrompt } from '../permissions/approval';
 import { requireSiteAccess } from '../permissions/site-access';
 import { siteForUrl } from '../permissions/site';
 import type { ContentBlock } from '../protocol';
@@ -41,7 +42,7 @@ async function lastFocusedNormalWindowId(skipPrivate: boolean): Promise<number> 
   return window.id;
 }
 
-export async function tabsCreate(args: Record<string, unknown>): Promise<ContentBlock[]> {
+export async function tabsCreate(args: Record<string, unknown>, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
   const parsed = parseTabsCreateArgs(args);
   if (!parsed.ok) throw new ToolError(`Failed to create a tab: ${parsed.error}`);
   const { url } = parsed.value;
@@ -50,12 +51,15 @@ export async function tabsCreate(args: Record<string, unknown>): Promise<Content
   const approvedHost =
     url === undefined
       ? undefined
-      : await requireSiteAccess({
-          url,
-          tool: 'tabs_create',
-          action: 'navigate',
-          subject: `Failed to create a tab with ${url}`,
-        });
+      : await requireSiteAccess(
+          {
+            url,
+            tool: 'tabs_create',
+            action: 'navigate',
+            subject: `Failed to create a tab with ${url}`,
+          },
+          prompt,
+        );
   const windowId = await lastFocusedNormalWindowId(cookieStoreId !== undefined);
   // Without a url Firefox would open the new tab page; about:blank keeps the tab empty.
   const tab = await browser.tabs.create({
@@ -130,7 +134,7 @@ function removeTab(tabId: number): Promise<boolean> {
   });
 }
 
-export async function tabsClose(args: Record<string, unknown>): Promise<ContentBlock[]> {
+export async function tabsClose(args: Record<string, unknown>, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
   const parsed = parseTabsCloseArgs(args);
   if (!parsed.ok) throw new ToolError(`Failed to close the tab: ${parsed.error}`);
   const { tabId } = parsed.value;
@@ -152,7 +156,7 @@ export async function tabsClose(args: Record<string, unknown>): Promise<ContentB
   }
   // Tabs without a site (new tab page, about:blank) close without a permission check.
   if (tab.url !== undefined && siteForUrl(tab.url).ok) {
-    await requireSiteAccess({ url: tab.url, tool: 'tabs_close', action: 'navigate', subject: `Failed to close tab ${tabId}` });
+    await requireSiteAccess({ url: tab.url, tool: 'tabs_close', action: 'navigate', subject: `Failed to close tab ${tabId}` }, prompt);
   }
 
   let closed: boolean;

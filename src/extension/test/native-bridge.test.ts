@@ -286,6 +286,69 @@ describe('tool requests', () => {
   });
 });
 
+describe('permission prompts through the MCP client', () => {
+  const PERMISSION = {
+    type: 'permission_request',
+    requestId: expect.any(String),
+    callId: '3:7',
+    host: 'example.com',
+    tool: 'tabs_close',
+    action: 'navigate',
+    canIncludeSubdomains: true,
+  };
+
+  // tabs_close on an http(s) tab asks for the site's permission before it closes anything.
+  function closableTab() {
+    browserMock.tabs.get.mockResolvedValue({ id: 5, url: 'https://example.com/', windowId: 1 });
+    browserMock.windows.get.mockResolvedValue({ id: 1, type: 'normal' });
+    browserMock.query.mockResolvedValue([{ id: 5 }, { id: 6 }]);
+  }
+
+  function permissionRequests(port: ReturnType<typeof lastPort>) {
+    return port.postMessage.mock.calls.map(([message]) => message as Record<string, unknown>).filter((message) => message.type === 'permission_request');
+  }
+
+  it('asks over the port for a flagged call and applies the answer', async () => {
+    closableTab();
+    const port = connectAndPong();
+    port.emitMessage({ type: 'tool_request', id: '3:7', tool: 'tabs_close', args: { tabId: 5 }, approvalViaClient: true });
+    await flushPromises();
+    const [request] = permissionRequests(port);
+    expect(request).toEqual(PERMISSION);
+    expect(browserMock.windows.create).not.toHaveBeenCalled();
+
+    port.emitMessage({ type: 'permission_response', requestId: request?.requestId, answer: 'deny', includeSubdomains: false });
+    await flushPromises();
+    expect(port.postMessage).toHaveBeenLastCalledWith({
+      type: 'tool_response',
+      id: '3:7',
+      error: { content: [{ type: 'text', text: expect.stringMatching(/^The user denied access to example.com/) }] },
+    });
+    expect(browserMock.tabs.remove).not.toHaveBeenCalled();
+  });
+
+  it('denies a pending client prompt when the port disconnects', async () => {
+    closableTab();
+    const port = connectAndPong();
+    port.emitMessage({ type: 'tool_request', id: '3:7', tool: 'tabs_close', args: { tabId: 5 }, approvalViaClient: true });
+    await flushPromises();
+    expect(permissionRequests(port)).toHaveLength(1);
+    port.emitDisconnect();
+    await flushPromises();
+    expect(browserMock.tabs.remove).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(1);
+  });
+
+  it('opens the popup for a call that is not flagged', async () => {
+    closableTab();
+    const port = connectAndPong();
+    port.emitMessage({ type: 'tool_request', id: '3:8', tool: 'tabs_close', args: { tabId: 5 } });
+    await flushPromises();
+    expect(permissionRequests(port)).toEqual([]);
+    expect(browserMock.windows.create).toHaveBeenCalledOnce();
+  });
+});
+
 describe('stale ports', () => {
   it('ignores messages and disconnects from a port that was replaced', async () => {
     bridge.connect();
