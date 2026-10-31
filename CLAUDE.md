@@ -63,7 +63,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [ ] `feature/amo-signing`: reserve a real extension id on AMO, sign with `web-ext sign` (unlisted), permanent install in release Firefox, verify `runtime.onStartup` reconnect. Needs the user's AMO account and API keys; timing decided separately.
 - [x] `feature/navigate`: `navigate`, `tabs_create`, `tabs_close`.
 - [x] `feature/screenshot`: screenshots and zoom via `tabs.captureTab`.
-- [ ] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); user choice between a dedicated agent container (`contextualIdentities`, isolated cookies and logins) and the normal profile, with default, switch location and per-domain mixing decided at the start; design after researching how Claude in Chrome does it.
+- [x] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); user choice between a dedicated agent container (`contextualIdentities`, isolated cookies and logins) and the normal profile, with default, switch location and per-domain mixing decided at the start; design after researching how Claude in Chrome does it.
 - [ ] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
 - [ ] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
 - [ ] `feature/devtools-tools`: `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`.
@@ -105,9 +105,10 @@ src/                   npm package root; every command is run from here
       permission-model.ts  permission records, pure check (deny wins, allow-once consumed), stored data validation
       permission-store.ts  records in storage.local under permissionStorage: load, add, revoke, clear, check
       agent-container.ts  finds, adopts or creates the "Claude" container for agent tabs, one resolution at a time
-      site-access.ts   gate used by the tools: requireSiteAccess (check, prompt, store), landedSite (redirect re-check)
+      site-access.ts   gate used by the tools: requireSiteAccess (check, prompt, store), landedSite (redirect re-check), approvalPromptFor
       approval.ts      ApprovalPrompt interface (requestApproval -> decision), prompt messages and answer parsing
       popup-prompt.ts  popup window prompt: windows.create, pending requests, runtime messages, close and 120 s timeout
+      client-prompt.ts  prompt answered in the MCP client (elicitation) over the native port, used for flagged calls; deny on timeout or disconnect
       prompt.html, prompt.ts  the prompt page: host, action, tool, allow/deny once/always, include subdomains
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
@@ -130,8 +131,8 @@ src/                   npm package root; every command is run from here
     listen.ts          listen on an endpoint, retrying fresh endpoints on EADDRINUSE
     json-lines.ts      newline-delimited JSON framing on the bridge socket
     native-messaging.ts  Firefox native messaging stdio framing
-    native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients
-    mcp-server.ts      MCP server over stdio: registers tools, forwards calls to the native host
+    native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients, routes permission requests
+    mcp-server.ts      MCP server over stdio: registers tools, forwards calls to the native host, asks permissions by elicitation
   node_modules/        (not committed)
   dist/extension/      built extension, loaded by web-ext (not committed)
   dist/host/index.js   bundled host for Node, run as `node dist/host/index.js --native-host|--mcp` (not committed)

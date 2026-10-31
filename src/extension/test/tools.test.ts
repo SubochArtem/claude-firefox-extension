@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ApprovalPrompt } from '../permissions/approval';
+import type { ClientApprovals } from '../permissions/client-prompt';
 import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 import { tabsContextText } from '../tools/tabs-context';
 import { executeTool } from '../tools';
@@ -37,6 +39,41 @@ describe('executeTool', () => {
       type: 'tool_response',
       id: '1:7',
       error: { content: [{ type: 'text', text: 'Tool execution failed: tabs API unavailable' }] },
+    });
+  });
+
+  describe('approval prompt choice', () => {
+    function clientApprovals() {
+      const prompt: ApprovalPrompt = {
+        requestApproval: vi.fn(async () => ({ kind: 'answered' as const, answer: 'deny' as const, wildcard: false })),
+      };
+      const approvals: ClientApprovals = { promptFor: vi.fn(() => prompt), handleResponse: vi.fn(), close: vi.fn() };
+      return { approvals, prompt };
+    }
+
+    beforeEach(() => {
+      browserMock.tabs.get.mockResolvedValue({ id: 5, windowId: 1, active: true, url: 'about:blank' });
+    });
+    const navigateRequest = (approvalViaClient: boolean) => ({
+      ...request('navigate', { tabId: 5, url: 'https://unknown.example/' }),
+      ...(approvalViaClient ? { approvalViaClient: true as const } : {}),
+    });
+
+    it('asks in the MCP client with the prompt for the request id when the call allows it', async () => {
+      const { approvals, prompt } = clientApprovals();
+      const response = await executeTool(navigateRequest(true), approvals);
+      expect(approvals.promptFor).toHaveBeenCalledWith('1:7');
+      expect(prompt.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ host: 'unknown.example' }));
+      expect(browserMock.windows.create).not.toHaveBeenCalled();
+      expect(response).toHaveProperty('error');
+    });
+
+    it('opens the popup prompt when the call does not allow asking in the client', async () => {
+      const { approvals, prompt } = clientApprovals();
+      const response = await executeTool(navigateRequest(false), approvals);
+      expect(prompt.requestApproval).not.toHaveBeenCalled();
+      expect(browserMock.windows.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'popup' }));
+      expect(response).toHaveProperty('error');
     });
   });
 

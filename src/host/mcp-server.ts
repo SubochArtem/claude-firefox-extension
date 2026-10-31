@@ -1,13 +1,24 @@
 import { createConnection, type Socket } from 'node:net';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ClientCapabilities, ElicitRequestFormParams, ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import * as z from 'zod/v4';
 import packageJson from '../package.json' with { type: 'json' };
 import { readBridgeInfo } from './bridge-info';
 import { authenticateToHost, HandshakeError } from './handshake';
 import { writeJsonLine } from './json-lines';
-import { parseToolResponse, TOOL_REQUEST_TIMEOUT_MS, type ToolRequest, type ToolResponse } from './protocol';
+import {
+  isRecord,
+  parsePermissionRequest,
+  parseToolResponse,
+  PERMISSION_ANSWERS,
+  PERMISSION_PROMPT_TIMEOUT_MS,
+  TOOL_REQUEST_TIMEOUT_MS,
+  type PermissionRequest,
+  type PermissionResponse,
+  type ToolRequest,
+  type ToolResponse,
+} from './protocol';
 import { checkBridgeSocketDir } from './socket-path';
 
 const LOG = '[mcp-server]';
@@ -22,10 +33,19 @@ class AuthenticationError extends Error {
 
 interface PendingCall {
   socket: Socket;
+  approvalViaClient: boolean;
+  // Aborted when the call ends, so a question still open in the MCP client is withdrawn.
+  questions: AbortController;
   resolve: (response: ToolResponse) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 }
+
+export type PermissionAnswer = Pick<PermissionResponse, 'answer' | 'includeSubdomains'>;
+// Asks the user in the MCP client; rejects or resolves with a deny when no answer was given.
+export type PermissionAsker = (request: PermissionRequest, signal: AbortSignal) => Promise<PermissionAnswer>;
+
+const DENY_ONCE: PermissionAnswer = { answer: 'deny', includeSubdomains: false };
 
 export class BridgeConnection {
   private socket: Socket | undefined;
@@ -34,7 +54,9 @@ export class BridgeConnection {
   private nextRequestId = 1;
   private closed = false;
 
-  async call(tool: string, args: Record<string, unknown>): Promise<CallToolResult> {
+  constructor(private readonly askUser?: PermissionAsker) {}
+
+  async call(tool: string, args: Record<string, unknown>, { approvalViaClient = false } = {}): Promise<CallToolResult> {
     if (this.closed) return errorResult('The MCP server is shutting down');
     let socket: Socket;
     try {
@@ -49,14 +71,15 @@ export class BridgeConnection {
     if (!isOpen(socket)) return errorResult(NOT_CONNECTED_MESSAGE);
 
     const id = String(this.nextRequestId++);
-    const request: ToolRequest = { type: 'tool_request', id, tool, args };
+    const request: ToolRequest = { type: 'tool_request', id, tool, args, ...(approvalViaClient ? { approvalViaClient: true } : {}) };
+    const questions = new AbortController();
     try {
       const response = await new Promise<ToolResponse>((resolve, reject) => {
         const timer = setTimeout(() => {
           this.pending.delete(id);
           reject(new Error(`${tool} timed out after ${TOOL_REQUEST_TIMEOUT_MS / 1000} s`));
         }, TOOL_REQUEST_TIMEOUT_MS);
-        this.pending.set(id, { socket, resolve, reject, timer });
+        this.pending.set(id, { socket, approvalViaClient, questions, resolve, reject, timer });
         writeJsonLine(socket, request, (error) => {
           if (!error || !this.pending.has(id)) return;
           clearTimeout(timer);
@@ -68,6 +91,8 @@ export class BridgeConnection {
       return { content: response.result.content };
     } catch (error) {
       return errorResult((error as Error).message);
+    } finally {
+      questions.abort();
     }
   }
 
@@ -140,6 +165,10 @@ export class BridgeConnection {
   }
 
   private handleMessage(socket: Socket, message: unknown): void {
+    if (isRecord(message) && message['type'] === 'permission_request') {
+      this.handlePermissionRequest(socket, message);
+      return;
+    }
     const response = parseToolResponse(message);
     if (!response) {
       console.error(`${LOG} native host sent an invalid message`);
@@ -150,6 +179,29 @@ export class BridgeConnection {
     clearTimeout(call.timer);
     this.pending.delete(response.id);
     call.resolve(response);
+  }
+
+  // Only a call pending in this process and flagged for client approval is asked about; anything
+  // else, and an answer that comes after the call has ended, is a deny once.
+  private handlePermissionRequest(socket: Socket, message: unknown): void {
+    const request = parsePermissionRequest(message);
+    if (!request) {
+      console.error(`${LOG} native host sent an invalid message`);
+      return;
+    }
+    const answer = (result: PermissionAnswer): void => {
+      if (isOpen(socket)) writeJsonLine(socket, { type: 'permission_response', requestId: request.requestId, ...result });
+    };
+    const call = this.pending.get(request.callId);
+    if (call?.socket !== socket || !call.approvalViaClient || !this.askUser || call.questions.signal.aborted) {
+      answer(DENY_ONCE);
+      return;
+    }
+    const { signal } = call.questions;
+    this.askUser(request, signal).then(
+      (result) => answer(signal.aborted ? DENY_ONCE : result),
+      () => answer(DENY_ONCE),
+    );
   }
 }
 
@@ -181,13 +233,58 @@ export const computerInputSchema = z.strictObject({
     ),
 });
 
+export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
+  return capabilities?.elicitation?.form !== undefined;
+}
+
+const DECISION_DESCRIPTION =
+  'allow_once: allow this action now; allow_always: always allow this site; deny: refuse this action; deny_always: always refuse this site';
+
+export function permissionElicitation(request: PermissionRequest): ElicitRequestFormParams {
+  return {
+    mode: 'form',
+    message: `Claude wants to access ${request.host} in Firefox.\nAction: ${request.action}\nTool: ${request.tool}`,
+    requestedSchema: {
+      type: 'object',
+      properties: {
+        decision: { type: 'string', title: 'Decision', description: DECISION_DESCRIPTION, enum: [...PERMISSION_ANSWERS] },
+        ...(request.canIncludeSubdomains
+          ? {
+              includeSubdomains: {
+                type: 'boolean',
+                title: 'Include subdomains',
+                description: 'Applies to the always answers only',
+                default: false,
+              },
+            }
+          : {}),
+      },
+      required: ['decision'],
+    },
+  };
+}
+
+export function permissionAnswer(request: PermissionRequest, result: ElicitResult): PermissionAnswer {
+  if (result.action !== 'accept' || !isRecord(result.content)) return DENY_ONCE;
+  const { decision, includeSubdomains } = result.content;
+  if (typeof decision !== 'string' || !(PERMISSION_ANSWERS as readonly string[]).includes(decision)) return DENY_ONCE;
+  return { answer: decision, includeSubdomains: request.canIncludeSubdomains && includeSubdomains === true };
+}
+
 function errorResult(text: string): CallToolResult {
   return { content: [{ type: 'text', text }], isError: true };
 }
 
 export async function runMcpServer(): Promise<void> {
-  const bridge = new BridgeConnection();
   const server = new McpServer({ name: packageJson.name, version: packageJson.version });
+  const bridge = new BridgeConnection(async (request, signal) =>
+    permissionAnswer(
+      request,
+      await server.server.elicitInput(permissionElicitation(request), { timeout: PERMISSION_PROMPT_TIMEOUT_MS, signal }),
+    ),
+  );
+  const forward = (tool: string) => (args: Record<string, unknown>) =>
+    bridge.call(tool, args, { approvalViaClient: supportsFormElicitation(server.server.getClientCapabilities()) });
 
   server.registerTool(
     'tabs_context',
@@ -196,7 +293,7 @@ export async function runMcpServer(): Promise<void> {
         'List the tabs currently open in Firefox together with their tab ids. Call this first to get a tab id that the other browser tools can target.',
       inputSchema: {},
     },
-    (args) => bridge.call('tabs_context', args),
+    forward('tabs_context'),
   );
 
   server.registerTool(
@@ -209,7 +306,7 @@ export async function runMcpServer(): Promise<void> {
         url: z.string().describe('URL to open, or "back" / "forward" to move through the tab history'),
       }),
     },
-    (args) => bridge.call('navigate', args),
+    forward('navigate'),
   );
 
   server.registerTool(
@@ -221,7 +318,7 @@ export async function runMcpServer(): Promise<void> {
         url: z.string().optional().describe('URL to open in the new tab; omit for an empty tab'),
       }),
     },
-    (args) => bridge.call('tabs_create', args),
+    forward('tabs_create'),
   );
 
   server.registerTool(
@@ -233,7 +330,7 @@ export async function runMcpServer(): Promise<void> {
         tabId: z.number().int().positive().describe('Id of the tab to close, from tabs_context'),
       }),
     },
-    (args) => bridge.call('tabs_close', args),
+    forward('tabs_close'),
   );
 
   server.registerTool(
@@ -243,7 +340,7 @@ export async function runMcpServer(): Promise<void> {
         'Interact with a browser tab. "screenshot" captures the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. "zoom" captures the region [x0, y0, x1, y1] of the last screenshot frame at up to device resolution to read small details; it does not change the frame, so coordinates keep referring to the last screenshot. More actions will be added.',
       inputSchema: computerInputSchema,
     },
-    (args) => bridge.call('computer', args),
+    forward('computer'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the
@@ -261,6 +358,11 @@ export async function runMcpServer(): Promise<void> {
   process.on('SIGINT', () => exit('SIGINT'));
   process.on('SIGTERM', () => exit('SIGTERM'));
 
+  // The SDK drops notifications/cancelled for request id 0, so a ping takes that id; otherwise the
+  // first permission question could not be withdrawn from the client when its tool call ends.
+  server.server.oninitialized = () => {
+    server.server.ping().catch(() => {});
+  };
   await server.connect(new StdioServerTransport());
   console.error(`${LOG} ready`);
 }

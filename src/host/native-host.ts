@@ -25,11 +25,15 @@ import { MAX_LINE_BYTES, readJsonLines, writeJsonLine } from './json-lines';
 import { listen, listenWithRetry } from './listen';
 import { readNativeMessages, writeNativeMessage } from './native-messaging';
 import {
+  denyPermission,
   errorResponse,
+  isRecord,
   parseExtensionMessage,
+  parsePermissionResponse,
   parseToolRequest,
   TOOL_REQUEST_TIMEOUT_MS,
   type HostToExtensionMessage,
+  type PermissionRequest,
   type ToolRequest,
   type ToolResponse,
 } from './protocol';
@@ -49,6 +53,7 @@ interface Client {
   id: number;
   socket: Socket;
   pendingIds: Set<string>;
+  permissionIds: Set<string>;
 }
 
 interface PendingRequest {
@@ -64,6 +69,8 @@ interface SocketIdentity {
 
 const clients = new Map<number, Client>();
 const pending = new Map<string, PendingRequest>();
+// Permission requests from the extension by requestId, with the client asked to answer them.
+const permissionRequests = new Map<string, Client>();
 const unauthenticated = new Set<Socket>();
 let nextClientId = 1;
 let shuttingDown = false;
@@ -116,6 +123,42 @@ function sendToExtension(message: HostToExtensionMessage): boolean {
 
 function respond(client: Client, response: ToolResponse): void {
   if (!client.socket.destroyed) writeJsonLine(client.socket, response);
+}
+
+// Only the client that owns the call is asked; without one the extension gets a deny at once.
+function handlePermissionRequest(request: PermissionRequest): void {
+  if (permissionRequests.has(request.requestId)) {
+    console.error(`${LOG} duplicate permission request ${request.requestId}`);
+    return;
+  }
+  const call = pending.get(request.callId);
+  if (!call || call.client.socket.destroyed) {
+    sendToExtension(denyPermission(request.requestId));
+    return;
+  }
+  permissionRequests.set(request.requestId, call.client);
+  call.client.permissionIds.add(request.requestId);
+  writeJsonLine(call.client.socket, { ...request, callId: call.originalId });
+}
+
+function handlePermissionResponse(client: Client, message: unknown): void {
+  const response = parsePermissionResponse(message);
+  if (!response) {
+    console.error(`${LOG} client ${client.id} sent an invalid message`);
+    return;
+  }
+  if (permissionRequests.get(response.requestId) !== client) {
+    console.error(`${LOG} permission response for unknown request ${response.requestId}`);
+    return;
+  }
+  permissionRequests.delete(response.requestId);
+  client.permissionIds.delete(response.requestId);
+  sendToExtension(response);
+}
+
+function handleClientMessage(client: Client, message: unknown): void {
+  if (isRecord(message) && message['type'] === 'permission_response') handlePermissionResponse(client, message);
+  else handleClientRequest(client, message);
 }
 
 function handleClientRequest(client: Client, message: unknown): void {
@@ -183,7 +226,7 @@ function handleConnection(socket: Socket): void {
     if (!auth) return reject('expected auth');
     if (!verifyProof(clientProof(info.secret, nonces.client, nonces.server), auth.proof)) return reject('wrong proof');
     releaseSlot();
-    client = { id, socket, pendingIds: new Set() };
+    client = { id, socket, pendingIds: new Set(), permissionIds: new Set() };
     clients.set(id, client);
     writeJsonLine(socket, { type: 'ready' });
   };
@@ -191,7 +234,7 @@ function handleConnection(socket: Socket): void {
   readJsonLines(
     socket,
     (message) => {
-      if (client) handleClientRequest(client, message);
+      if (client) handleClientMessage(client, message);
       else handleHandshake(message);
     },
     LOG,
@@ -213,6 +256,10 @@ function handleConnection(socket: Socket): void {
       clearTimeout(pending.get(pendingId)?.timer);
       pending.delete(pendingId);
     }
+    for (const requestId of client.permissionIds) {
+      permissionRequests.delete(requestId);
+      sendToExtension(denyPermission(requestId));
+    }
     clients.delete(id);
   });
 }
@@ -225,6 +272,10 @@ function handleExtensionMessage(message: unknown): void {
   }
   if (parsed.type === 'ping') {
     sendToExtension({ type: 'pong' });
+    return;
+  }
+  if (parsed.type === 'permission_request') {
+    handlePermissionRequest(parsed);
     return;
   }
   const entry = pending.get(parsed.id);

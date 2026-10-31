@@ -1,3 +1,4 @@
+import { type ClientApprovals, createClientApprovals } from './permissions/client-prompt';
 import { type ExtensionToHostMessage, NATIVE_HOST_NAME, parseHostMessage } from './protocol';
 import { executeTool } from './tools';
 
@@ -13,6 +14,8 @@ export const RECONNECT_ALARM = 'reconnect-native-host';
 const RECONNECT_ALARM_PERIOD_MINUTES = 0.5;
 
 let port: browser.runtime.Port | undefined;
+// Permission prompts answered in the MCP client over the current port; denied when the port goes.
+let clientApprovals: ClientApprovals | undefined;
 let pongTimer: ReturnType<typeof setTimeout> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let stableTimer: ReturnType<typeof setTimeout> | undefined;
@@ -23,6 +26,7 @@ export function connect(): void {
 
   const current = browser.runtime.connectNative(NATIVE_HOST_NAME);
   port = current;
+  clientApprovals = createClientApprovals((message) => send(current, message));
   current.onMessage.addListener((message) => handleMessage(current, message));
   current.onDisconnect.addListener(() => {
     // Firefox reports why a port closed on port.error, not on runtime.lastError as Chrome does.
@@ -60,7 +64,11 @@ function handleMessage(source: browser.runtime.Port, message: unknown): void {
     console.log('Connected to native host');
     return;
   }
-  void executeTool(parsed).then((response) => {
+  if (parsed.type === 'permission_response') {
+    clientApprovals?.handleResponse(parsed);
+    return;
+  }
+  void executeTool(parsed, clientApprovals).then((response) => {
     if (source === port) send(source, response);
   });
 }
@@ -68,6 +76,8 @@ function handleMessage(source: browser.runtime.Port, message: unknown): void {
 function handleLoss(lost: browser.runtime.Port): void {
   if (lost !== port) return;
   port = undefined;
+  clientApprovals?.close();
+  clientApprovals = undefined;
   clearTimeout(pongTimer);
   pongTimer = undefined;
   clearTimeout(stableTimer);

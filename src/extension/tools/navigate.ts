@@ -1,3 +1,4 @@
+import type { ApprovalPrompt } from '../permissions/approval';
 import { siteForUrl } from '../permissions/site';
 import { landedSite, requireSiteAccess } from '../permissions/site-access';
 import type { ContentBlock } from '../protocol';
@@ -331,7 +332,7 @@ export async function navigateTab(
   }
 }
 
-export async function navigate(args: Record<string, unknown>): Promise<ContentBlock[]> {
+export async function navigate(args: Record<string, unknown>, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
   const parsed = parseNavigateArgs(args);
   if (!parsed.ok) throw new ToolError(`Failed to navigate: ${parsed.error}`);
   const { tabId, target } = parsed.value;
@@ -340,12 +341,15 @@ export async function navigate(args: Record<string, unknown>): Promise<ContentBl
 
   const approvedHost =
     target.kind === 'url'
-      ? await requireSiteAccess({
-          url: target.url,
-          tool: 'navigate',
-          action: 'navigate',
-          subject: `Failed to navigate to ${target.url}`,
-        })
+      ? await requireSiteAccess(
+          {
+            url: target.url,
+            tool: 'navigate',
+            action: 'navigate',
+            subject: `Failed to navigate to ${target.url}`,
+          },
+          prompt,
+        )
       : undefined;
 
   const prefix = HISTORY_PREFIX[target.kind];

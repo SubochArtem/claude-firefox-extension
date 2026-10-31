@@ -1,3 +1,6 @@
+import type { ApprovalPrompt } from '../permissions/approval';
+import type { ClientApprovals } from '../permissions/client-prompt';
+import { approvalPromptFor } from '../permissions/site-access';
 import type { ContentBlock, ToolRequest, ToolResponse } from '../protocol';
 import { computer } from './computer';
 import { navigate } from './navigate';
@@ -5,7 +8,7 @@ import { tabsClose, tabsCreate } from './tabs';
 import { tabsContext } from './tabs-context';
 import { ToolError } from './tool-error';
 
-type ToolHandler = (args: Record<string, unknown>) => Promise<ContentBlock[]>;
+type ToolHandler = (args: Record<string, unknown>, prompt: ApprovalPrompt) => Promise<ContentBlock[]>;
 
 const tools = new Map<string, ToolHandler>([
   ['tabs_context', tabsContext],
@@ -19,11 +22,14 @@ function errorResponse(id: string, text: string): ToolResponse {
   return { type: 'tool_response', id, error: { content: [{ type: 'text', text }] } };
 }
 
-export async function executeTool(request: ToolRequest): Promise<ToolResponse> {
+export async function executeTool(request: ToolRequest, clientApprovals?: ClientApprovals): Promise<ToolResponse> {
   const handler = tools.get(request.tool);
   if (!handler) return errorResponse(request.id, `Unknown tool: ${request.tool}`);
   try {
-    const content = await handler(request.args);
+    const prompt = approvalPromptFor(
+      clientApprovals && { viaClient: request.approvalViaClient === true, clientPrompt: clientApprovals.promptFor(request.id) },
+    );
+    const content = await handler(request.args, prompt);
     return { type: 'tool_response', id: request.id, result: { content } };
   } catch (error) {
     if (error instanceof ToolError) return errorResponse(request.id, error.message);

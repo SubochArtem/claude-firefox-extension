@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { ElicitRequestSchema, type ElicitRequest, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import {
   APP_DIR,
@@ -22,6 +23,7 @@ import {
   textResult,
   track,
   waitFor,
+  type FakeHost,
   type FakeHostMode,
 } from './helpers';
 
@@ -39,11 +41,15 @@ function serverEnv(runtimeDir: string): Record<string, string> {
     : { ...getDefaultEnvironment(), XDG_RUNTIME_DIR: runtimeDir };
 }
 
+type ElicitHandler = (request: ElicitRequest, signal: AbortSignal) => Promise<ElicitResult>;
+
 // StdioClientTransport always merges `env` into the SDK's default environment; `env` replaces
-// serverEnv(runtimeDir).
+// serverEnv(runtimeDir). With `elicit` the client declares the elicitation capability and answers
+// elicitation requests with it.
 async function startMcp(
   runtimeDir: string,
   env: Record<string, string> = serverEnv(runtimeDir),
+  elicit?: ElicitHandler,
 ): Promise<{ client: Client; stderr: () => string }> {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -55,7 +61,11 @@ async function startMcp(
   transport.stderr?.on('data', (chunk: Buffer) => {
     stderr += chunk.toString('utf8');
   });
-  const client = new Client({ name: 'mcp-server-test', version: '0.0.0' });
+  const client = new Client(
+    { name: 'mcp-server-test', version: '0.0.0' },
+    elicit ? { capabilities: { elicitation: {} } } : undefined,
+  );
+  if (elicit) client.setRequestHandler(ElicitRequestSchema, (request, extra) => elicit(request, extra.signal));
   onTestFinished(() => client.close());
   await client.connect(transport);
   return { client, stderr: () => stderr };
@@ -468,6 +478,157 @@ describe('MCP server process', () => {
     mcp.child.stdin.end();
     expect(await mcp.exited).toBe(0);
     expect(mcp.stderr()).toMatch(/exiting: stdin closed/);
+  });
+});
+
+function permissionRequest(callId: string, requestId = 'req-1', canIncludeSubdomains = true): Record<string, unknown> {
+  return {
+    type: 'permission_request',
+    requestId,
+    callId,
+    host: 'example.com',
+    tool: 'navigate',
+    action: 'navigate',
+    canIncludeSubdomains,
+  };
+}
+
+function permissionResponses(host: FakeHost): Record<string, unknown>[] {
+  return host.requests.filter((message) => message['type'] === 'permission_response');
+}
+
+const DENY = { type: 'permission_response', requestId: 'req-1', answer: 'deny', includeSubdomains: false };
+
+// Starts a navigate call through the fake host and waits until the host has its tool request.
+async function startNavigate(host: FakeHost, client: Client) {
+  const call = client.callTool({ name: 'navigate', arguments: { tabId: 1, url: 'example.com' } });
+  // Tests that do not wait for the result close the client with the call still open.
+  call.catch(() => {});
+  const request = await waitFor(() => {
+    const found = host.requests.find((message) => message['type'] === 'tool_request');
+    if (!found) throw new Error('no tool request yet');
+    return found;
+  });
+  return { call, request };
+}
+
+describe('MCP server permission elicitation', () => {
+  it('does not flag calls for client approval when the client has no elicitation capability, and denies its permission requests', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    const { client } = await startMcp(runtimeDir);
+    const { call, request } = await startNavigate(host, client);
+    expect(request).toEqual({ type: 'tool_request', id: '1', tool: 'navigate', args: { tabId: 1, url: 'example.com' } });
+    host.answer(permissionRequest('1'));
+    await waitFor(() => expect(permissionResponses(host)).toEqual([DENY]));
+    host.answer(textResult('1', 'done'));
+    expect(await call).toEqual({ content: [{ type: 'text', text: 'done' }] });
+  });
+
+  it('flags calls for client approval and forwards the decision the user accepted', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    const asked: ElicitRequest[] = [];
+    const { client } = await startMcp(runtimeDir, undefined, async (request) => {
+      asked.push(request);
+      return { action: 'accept', content: { decision: 'allow_always', includeSubdomains: true } };
+    });
+    const { call, request } = await startNavigate(host, client);
+    expect(request).toMatchObject({ id: '1', approvalViaClient: true });
+    host.answer(permissionRequest('1'));
+    await waitFor(() =>
+      expect(permissionResponses(host)).toEqual([
+        { type: 'permission_response', requestId: 'req-1', answer: 'allow_always', includeSubdomains: true },
+      ]),
+    );
+    expect(asked).toHaveLength(1);
+    const params = asked[0]?.params as { message: string; requestedSchema: Record<string, unknown> };
+    expect(params.message).toContain('example.com');
+    expect(params.message).toContain('navigate');
+    expect(params.requestedSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        decision: { type: 'string', enum: ['allow_once', 'allow_always', 'deny', 'deny_always'] },
+        includeSubdomains: { type: 'boolean', default: false },
+      },
+      required: ['decision'],
+    });
+    host.answer(textResult('1', 'done'));
+    expect(await call).toEqual({ content: [{ type: 'text', text: 'done' }] });
+  });
+
+  it('offers no subdomain choice and forwards none when the host cannot have a wildcard', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    const asked: ElicitRequest[] = [];
+    const { client } = await startMcp(runtimeDir, undefined, async (request) => {
+      asked.push(request);
+      return { action: 'accept', content: { decision: 'deny_always', includeSubdomains: true } };
+    });
+    await startNavigate(host, client);
+    host.answer(permissionRequest('1', 'req-1', false));
+    await waitFor(() =>
+      expect(permissionResponses(host)).toEqual([
+        { type: 'permission_response', requestId: 'req-1', answer: 'deny_always', includeSubdomains: false },
+      ]),
+    );
+    const schema = (asked[0]?.params as { requestedSchema: { properties: Record<string, unknown> } }).requestedSchema;
+    expect(Object.keys(schema.properties)).toEqual(['decision']);
+  });
+
+  it.each<[string, ElicitHandler]>([
+    ['declines', async () => ({ action: 'decline' })],
+    ['cancels', async () => ({ action: 'cancel' })],
+    ['fails', async () => Promise.reject(new Error('no user'))],
+    ['accepts without a decision', async () => ({ action: 'accept', content: {} })],
+    ['accepts an unknown decision', async () => ({ action: 'accept', content: { decision: 'maybe' } })],
+  ])('answers deny once when the client %s', async (_label, elicit) => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    const { client } = await startMcp(runtimeDir, undefined, elicit);
+    await startNavigate(host, client);
+    host.answer(permissionRequest('1'));
+    await waitFor(() => expect(permissionResponses(host)).toEqual([DENY]));
+  });
+
+  it('denies a permission request for a call that is not pending without asking', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    let asked = 0;
+    const { client } = await startMcp(runtimeDir, undefined, async () => {
+      asked++;
+      return { action: 'accept', content: { decision: 'allow_once' } };
+    });
+    await startNavigate(host, client);
+    host.answer(permissionRequest('7'));
+    await waitFor(() => expect(permissionResponses(host)).toEqual([DENY]));
+    expect(asked).toBe(0);
+  });
+
+  it('aborts the question when the call ends and ignores the late answer', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    let answer: ((result: ElicitResult) => void) | undefined;
+    let aborted = false;
+    const { client } = await startMcp(runtimeDir, undefined, (_request, signal) => {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+      });
+      return new Promise((resolve) => {
+        answer = resolve;
+      });
+    });
+    const { call } = await startNavigate(host, client);
+    host.answer(permissionRequest('1'));
+    await waitFor(() => expect(answer).toBeDefined());
+
+    host.answer(textResult('1', 'ended'));
+    expect(await call).toEqual({ content: [{ type: 'text', text: 'ended' }] });
+    await waitFor(() => expect(permissionResponses(host)).toEqual([DENY]));
+    await waitFor(() => expect(aborted).toBe(true));
+    answer?.({ action: 'accept', content: { decision: 'allow_always' } });
+    await sleep(100);
+    expect(permissionResponses(host)).toEqual([DENY]);
   });
 });
 

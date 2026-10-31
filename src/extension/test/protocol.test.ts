@@ -15,8 +15,33 @@ describe('parseHostMessage', () => {
     });
   });
 
+  it('keeps approvalViaClient only when it is true', () => {
+    expect(parseHostMessage({ type: 'tool_request', id: '1:2', tool: 't', args: {}, approvalViaClient: true })).toEqual({
+      type: 'tool_request',
+      id: '1:2',
+      tool: 't',
+      args: {},
+      approvalViaClient: true,
+    });
+    expect(parseHostMessage({ type: 'tool_request', id: '1:2', tool: 't', args: {}, approvalViaClient: 'yes' })).not.toHaveProperty(
+      'approvalViaClient',
+    );
+  });
+
+  it('accepts a permission response and leaves the answer to the approval parser', () => {
+    expect(parseHostMessage({ type: 'permission_response', requestId: 'r', answer: 'maybe', includeSubdomains: 1, x: 1 })).toEqual({
+      type: 'permission_response',
+      requestId: 'r',
+      answer: 'maybe',
+      includeSubdomains: 1,
+    });
+  });
+
   it.each([
     ['undefined', undefined],
+    ['a permission response without a requestId', { type: 'permission_response', answer: 'deny' }],
+    ['a permission response with a numeric requestId', { type: 'permission_response', requestId: 1, answer: 'deny' }],
+    ['a permission request', { type: 'permission_request', requestId: 'r', callId: '1:1' }],
     ['null', null],
     ['a string', 'pong'],
     ['an array', [{ type: 'pong' }]],
