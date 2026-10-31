@@ -262,6 +262,16 @@ export const readPageInputSchema = z.strictObject({
     .describe('Maximum length of the output in characters (default 50000); longer output is cut with a note'),
 });
 
+export const pageTextInputSchema = z.strictObject({
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+  max_chars: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('Maximum length of the text in characters (default 50000); longer text is cut at a line break with a note'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -380,6 +390,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: readPageInputSchema,
     },
     forward('read_page'),
+  );
+
+  server.registerTool(
+    'get_page_text',
+    {
+      description:
+        'Extract the main readable text of a page as plain text, prioritising article content: the longest article, else main, else common content containers, else the whole body. Whitespace is collapsed and blank lines are kept to one. Defaults to the active tab; get other tab ids from tabs_context. Returns the page title, URL and the element the text came from, then the text; text longer than max_chars is truncated with a note. Use read_page instead to find elements to interact with.',
+      inputSchema: pageTextInputSchema,
+    },
+    forward('get_page_text'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the

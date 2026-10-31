@@ -84,7 +84,7 @@ describe('MCP server process', () => {
   it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
   });
@@ -195,6 +195,22 @@ describe('MCP server process', () => {
     expect(readPage?.inputSchema.required ?? []).toEqual([]);
     expect(readPage?.description).toMatch(/ref_12/);
     expect(readPage?.description).toMatch(/max_chars/);
+  });
+
+  it('lists get_page_text with optional tabId and max_chars', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const pageText = tools.find((tool) => tool.name === 'get_page_text');
+    expect(pageText?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        tabId: { type: 'integer' },
+        max_chars: { type: 'integer', exclusiveMinimum: 0 },
+      },
+    });
+    expect(Object.keys(pageText?.inputSchema.properties ?? {})).toEqual(['tabId', 'max_chars']);
+    expect(pageText?.inputSchema.required ?? []).toEqual([]);
+    expect(pageText?.description).toMatch(/article/);
   });
 
   it('returns a screenshot from the extension as MCP text and image content', async () => {

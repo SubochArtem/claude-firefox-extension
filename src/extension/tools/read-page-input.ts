@@ -19,7 +19,7 @@ const PARAMETERS = ['tabId', 'filter', 'depth', 'ref_id', 'max_chars'];
 const REF_ID_PATTERN = /^ref_\d+$/;
 const MAX_ECHOED_LENGTH = 100;
 
-function echo(value: unknown): string {
+export function echo(value: unknown): string {
   if (typeof value !== 'string') return describe(value);
   return JSON.stringify(value.length > MAX_ECHOED_LENGTH ? `${value.slice(0, MAX_ECHOED_LENGTH)}…` : value);
 }
@@ -37,7 +37,7 @@ function parseFilter(value: unknown): ParseResult<ReadPageFilter> {
   return { ok: true, value };
 }
 
-function parsePositiveInteger(name: string, value: unknown, fallback: number): ParseResult<number> {
+export function parsePositiveInteger(name: string, value: unknown, fallback: number): ParseResult<number> {
   if (value === undefined) return { ok: true, value: fallback };
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
     return { ok: false, error: `${name} must be a positive integer, received ${echo(value)}` };
