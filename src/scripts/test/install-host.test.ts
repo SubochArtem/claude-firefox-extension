@@ -30,7 +30,7 @@ let layout: Layout;
 
 // The installer resolves dist/host/index.js relative to its own location, so a copy inside a temp
 // package directory installs a fake build. The quote and space in the path exercise shell quoting.
-beforeEach(async () => {
+async function createLayout(): Promise<void> {
   const base = await mkdtemp('/tmp/cfe-');
   onTestFinished(() => rm(base, { recursive: true, force: true }));
   const packageDir = join(base, "it's a pkg");
@@ -47,7 +47,7 @@ beforeEach(async () => {
       await copyFile(join(scriptsDir, name), join(packageDir, 'scripts', name));
     }
   }
-});
+}
 
 async function writeFakeBuild(): Promise<void> {
   await mkdir(join(layout.packageDir, 'dist/host'), { recursive: true });
@@ -69,6 +69,8 @@ function manifestPath(): string {
 }
 
 describe.runIf(process.platform === 'linux')('install-host', () => {
+  beforeEach(createLayout);
+
   it('writes the native messaging manifest', async () => {
     await writeFakeBuild();
     await runInstaller();
