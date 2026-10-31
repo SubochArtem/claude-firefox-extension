@@ -37,6 +37,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Screenshots: one `computer` tool whose action enum grows per feature; `tabs.captureTab` without activating the tab, fitted to 1568 px / 1568 tokens, JPEG quality stepped down to fit about 1 MB; `<all_urls>` granted manually in about:addons until `feature/permissions`; see [Screenshots](docs/decisions.md#screenshots).
 - Tab scope: the agent may navigate and close any tab in any normal window (user decision); with `feature/permissions` every action on a site is checked against that site's permission.
 - Permissions: per-site (host, optional subdomain wildcard) allow/deny once/always records in `storage.local`, deny wins, only http(s) URLs; agent tabs in a "Claude" container by default; see [Permissions](docs/decisions.md#permissions).
+- Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -93,12 +94,17 @@ src/                   npm package root; every command is run from here
   scripts/test/        installer tests (against a temp HOME), e2e safety tests
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
-    test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks
+    test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks, happy-dom tests for page/
     settings.ts        extension settings in storage.local (agent tabs: Claude container or normal profile), validated loader
     options/           options page (about:addons): agent tabs switch, stored site permissions with Revoke
       options.html, options.ts  the page: renders with textContent, live refresh on storage changes
       options-view.ts  pure rows for the permission list
       options-messages.ts  background handler for revoke requests from the options page
+    page/              code that runs inside the page (no browser.* calls)
+      ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
+      element-role.ts  role from the role attribute or the tag, interactive check, heading level
+      accessible-name.ts  accessible name, visible text, sensitive field check, text clipping and quote escaping
+      accessibility-tree.ts  tree builder: visibility, filters, depth, element cap, max chars, ref_id subtree
     permissions/       site permissions: model, storage, enforcement gate, approval prompt
       actions.ts       permission action types and the mapping from tool calls
       site.ts          http(s)-only URL to host normalization, host and wildcard matching
