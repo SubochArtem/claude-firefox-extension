@@ -393,12 +393,13 @@ async function startMcp() {
 }
 
 const PAGE_TITLE = 'Claude Firefox Extension e2e page';
+const PAGE_BUTTON = 'e2e button';
 
 /** Serves one small HTML page on 127.0.0.1 for the navigation checks and returns its url. */
 async function startPageServer() {
   const server = createServer((_request, response) => {
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    response.end(`<!doctype html><title>${PAGE_TITLE}</title><p>e2e</p>`);
+    response.end(`<!doctype html><title>${PAGE_TITLE}</title><h1>e2e</h1><button>${PAGE_BUTTON}</button>`);
   });
   pageServer = server;
   await new Promise((resolve, reject) => {
@@ -673,6 +674,30 @@ async function main() {
       check(bytes[0] === 0xff && bytes[1] === 0xd8, 'the screenshot image is not a JPEG');
       check(tab?.active === false, `the screenshot activated tab ${tabId}`);
       return `${size[1]}x${size[2]}, ${bytes.length} bytes`;
+    } finally {
+      await client.callTool({ name: 'tabs_close', arguments: { tabId } });
+    }
+  });
+
+  await step('read_page of a background tab through the MCP server', async () => {
+    const client = mcpClient;
+    check(client !== undefined, 'no MCP client');
+    const created = await client.callTool({ name: 'tabs_create', arguments: { url: pageUrl } });
+    const createdText = resultText(created);
+    const tabId = Number(/^Created tab (\d+) /.exec(createdText)?.[1]);
+    check(!created.isError && Number.isInteger(tabId), `tabs_create failed: ${createdText}`);
+    try {
+      const first = await client.callTool({ name: 'read_page', arguments: { tabId } });
+      const text = resultText(first);
+      check(!first.isError, `read_page failed: ${text}`);
+      const button = new RegExp(`^button "${PAGE_BUTTON}" \\[(ref_\\d+)\\]$`, 'm').exec(text);
+      check(button !== null, `read_page has no button line: ${text}`);
+      check(/^heading "e2e" \[ref_\d+\] level=1$/m.test(text), `read_page has no heading line: ${text}`);
+      check(/\n\nViewport: \d+x\d+$/.test(text), `read_page has no viewport line: ${text}`);
+      const again = await client.callTool({ name: 'read_page', arguments: { tabId, ref_id: button[1] } });
+      const againText = resultText(again);
+      check(!again.isError && againText.startsWith(`button "${PAGE_BUTTON}" [${button[1]}]`), `read_page ref_id failed: ${againText}`);
+      return `${button[1]} stable across calls`;
     } finally {
       await client.callTool({ name: 'tabs_close', arguments: { tabId } });
     }

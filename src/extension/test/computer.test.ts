@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { executeTool } from '../tools';
-import { MAX_IMAGE_BASE64_LENGTH, permissionMessage, screenshotFrames, siteChangedMessage } from '../tools/computer';
+import { MAX_IMAGE_BASE64_LENGTH, screenshotFrames, siteChangedMessage } from '../tools/computer';
+import { permissionMessage } from '../tools/tab-access';
 import { PROMPT_ANSWER_MESSAGE } from '../permissions/approval';
 import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 import { handlePromptMessage } from '../permissions/popup-prompt';

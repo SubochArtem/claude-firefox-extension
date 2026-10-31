@@ -86,7 +86,7 @@ src/                   npm package root; every command is run from here
   tsconfig.json        type check for build scripts, their tests, web-ext and Vitest config (Node types, no DOM)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
   vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), scripts
-  scripts/build.mjs    esbuild bundling of extension/ into dist/extension and host/ into dist/host
+  scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js) into dist/extension and host/ into dist/host
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
@@ -100,11 +100,13 @@ src/                   npm package root; every command is run from here
       options.html, options.ts  the page: renders with textContent, live refresh on storage changes
       options-view.ts  pure rows for the permission list
       options-messages.ts  background handler for revoke requests from the options page
-    page/              code that runs inside the page (no browser.* calls)
+    page/              code that runs inside the page, in the isolated world of the top frame (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
       element-role.ts  role from the role attribute or the tag, interactive check, heading level
       accessible-name.ts  accessible name, visible text, sensitive field check, text clipping and quote escaping
       accessibility-tree.ts  tree builder: visibility, filters, depth, element cap, max chars, ref_id subtree
+      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page entry point once per document
+      read-page-api.ts  entry point name, script path and result types shared with the tool
     permissions/       site permissions: model, storage, enforcement gate, approval prompt
       actions.ts       permission action types and the mapping from tool calls
       site.ts          http(s)-only URL to host normalization, host and wildcard matching
@@ -124,6 +126,9 @@ src/                   npm package root; every command is run from here
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
       computer.ts      computer tool, actions screenshot and zoom: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
+      read-page-input.ts  pure argument validation for read_page
+      read-page.ts     read_page tool: site gate, injects the page bundle only when missing, restricted page and timeout errors
+      tab-access.ts    shared tab helpers for page tools: resolve the target tab, restricted domains, permission and restricted page messages
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included

@@ -84,7 +84,7 @@ describe('MCP server process', () => {
   it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
   });
@@ -176,6 +176,25 @@ describe('MCP server process', () => {
     });
     expect(computer?.description).toMatch(/screenshot/);
     expect(computer?.description).toMatch(/zoom/);
+  });
+
+  it('lists read_page with optional tabId, filter, depth, ref_id and max_chars', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const readPage = tools.find((tool) => tool.name === 'read_page');
+    expect(readPage?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: {
+        tabId: { type: 'integer' },
+        filter: { type: 'string', enum: ['all', 'interactive'] },
+        depth: { type: 'integer', exclusiveMinimum: 0 },
+        ref_id: { type: 'string', pattern: '^ref_\\d+$' },
+        max_chars: { type: 'integer', exclusiveMinimum: 0 },
+      },
+    });
+    expect(readPage?.inputSchema.required ?? []).toEqual([]);
+    expect(readPage?.description).toMatch(/ref_12/);
+    expect(readPage?.description).toMatch(/max_chars/);
   });
 
   it('returns a screenshot from the extension as MCP text and image content', async () => {

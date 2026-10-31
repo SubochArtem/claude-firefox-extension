@@ -3,7 +3,7 @@ import { PROMPT_ANSWER_MESSAGE, PROMPT_GET_MESSAGE, type PromptDetails } from '.
 
 const ACTION_LABELS: Record<PermissionAction, string> = {
   navigate: 'Open or close pages on this site',
-  read_page_content: 'Read page content (screenshots)',
+  read_page_content: 'Read page content (screenshots, page structure)',
   click: 'Click on the page',
   type: 'Type into the page',
   execute_javascript: 'Run JavaScript on the page',

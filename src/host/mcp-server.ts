@@ -233,6 +233,35 @@ export const computerInputSchema = z.strictObject({
     ),
 });
 
+export const readPageInputSchema = z.strictObject({
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+  filter: z
+    .enum(['all', 'interactive'])
+    .optional()
+    .describe(
+      '"all" (default): interactive elements, landmarks, headings, lists and named elements; "interactive": only links, buttons, form fields and other controls',
+    ),
+  depth: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe(
+      'Maximum number of printed tree levels (default 15); counts indentation levels of the output, not DOM nesting, since wrappers that are not printed do not add a level. A note marks a cut.',
+    ),
+  ref_id: z
+    .string()
+    .regex(/^ref_\d+$/)
+    .optional()
+    .describe('Read only the subtree of this element, a ref_N from an earlier read_page of the same page'),
+  max_chars: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe('Maximum length of the output in characters (default 50000); longer output is cut with a note'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -341,6 +370,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: computerInputSchema,
     },
     forward('computer'),
+  );
+
+  server.registerTool(
+    'read_page',
+    {
+      description:
+        'Read the structure of a page as an accessibility tree built from its DOM: one line per element with its role, name, a reference like [ref_12] and state (href, value, checked, expanded...). Hidden elements are left out and password-like fields are redacted. Defaults to the active tab; get other tab ids from tabs_context. References stay valid for the same element until the page is reloaded or navigates; pass ref_id to read just that element\'s subtree. Output longer than max_chars is truncated with a note: narrow it with ref_id, a smaller depth or filter "interactive". Ends with the viewport size in CSS pixels.',
+      inputSchema: readPageInputSchema,
+    },
+    forward('read_page'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the

@@ -36,6 +36,10 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('computer', { action, tabId: 1 })).toBe('read_page_content');
   });
 
+  it('maps read_page to read_page_content', () => {
+    expect(permissionActionForTool('read_page', { tabId: 1, filter: 'interactive' })).toBe('read_page_content');
+  });
+
   it.each([undefined, null, 'url', 42, ['https://example.com']])('treats non-object args %j as empty', (args) => {
     expect(permissionActionForTool('navigate', args)).toBe('navigate');
     expect(permissionActionForTool('tabs_create', args)).toBeUndefined();

@@ -9,7 +9,9 @@ const outDir = join(root, 'dist/extension');
 const hostSrcDir = join(root, 'host');
 const hostOutDir = join(root, 'dist/host');
 
-const entryPoints = ['background.ts', 'permissions/prompt.ts', 'options/options.ts'].map((file) => join(srcDir, file));
+const entryPoints = ['background.ts', 'permissions/prompt.ts', 'options/options.ts', 'page/read-page.ts'].map((file) =>
+  join(srcDir, file),
+);
 const manifest = join(srcDir, 'manifest.json');
 const hostEntryPoint = join(hostSrcDir, 'index.ts');
 
