@@ -107,7 +107,9 @@ src/                   npm package root; every command is run from here
       accessibility-tree.ts  tree builder: visibility, filters, depth, element cap, max chars, ref_id subtree; walker of the tree's elements for find
       find-elements.ts  find search: query words and role words, scoring tiers, top 20 lines with refs
       find-api.ts      find entry point name and result types shared with the tool
-      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page and find entry points once per document, sharing one ref registry
+      form-input.ts    form_input in the page: resolves the ref, validates the value per element type, sets it through native setters, fires input/change, redacts sensitive fields
+      form-input-api.ts  form_input entry point name, value and result types shared with the tool
+      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page, find and form_input entry points once per document, sharing one ref registry
       read-page-api.ts  entry point name, script path and result types shared with the tool
       main-text.ts     page text: content root selection, whitespace normalisation, truncation
       page-text.ts     entry of the injected bundle dist/extension/page/page-text.js: installs the get_page_text entry point once per document
@@ -133,11 +135,13 @@ src/                   npm package root; every command is run from here
       computer.ts      computer tool, actions screenshot and zoom: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
       read-page-input.ts  pure argument validation for read_page
       read-page.ts     read_page tool: options, result check and output on top of page-script.ts
-      page-script.ts   shared runner for page bundles: site gate, landed-site re-checks, injects the bundle only when missing, restricted page and timeout errors
+      page-script.ts   shared runner for page bundles: site gate for the tool's action, landed-site re-checks, injects the bundle only when missing, restricted page and timeout errors
       page-text-input.ts  pure argument validation for get_page_text
       page-text.ts     get_page_text tool: title, URL, source element and text of the page
       find-input.ts    pure argument validation for find
       find.ts          find tool: runs the find entry point of the read_page bundle on top of page-script.ts
+      form-input-input.ts  pure argument validation for form_input
+      form-input.ts    form_input tool: runs the form_input entry point of the read_page bundle behind the type permission
       tab-access.ts    shared tab helpers for page tools: resolve the target tab, restricted domains, permission and restricted page messages
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point

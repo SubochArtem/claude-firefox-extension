@@ -281,6 +281,19 @@ export const findInputSchema = z.strictObject({
   tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
 });
 
+export const formInputInputSchema = z.strictObject({
+  ref: z
+    .string()
+    .regex(/^ref_\d+$/)
+    .describe('The form element to set, a ref_N from read_page or find on the same page'),
+  value: z
+    .union([z.string(), z.boolean(), z.number()])
+    .describe(
+      'The value: text for text-like inputs, textareas and editable elements; true or false for a checkbox; a number for number and range inputs; the value or visible text of an option for a select',
+    ),
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -419,6 +432,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: findInputSchema,
     },
     forward('find'),
+  );
+
+  server.registerTool(
+    'form_input',
+    {
+      description:
+        'Set the value of a form element directly in the page, by a ref_N from read_page or find: text-like inputs (text, email, search, url, tel, password, date, time, datetime-local, month, week, color), textareas and contenteditable elements take text; a checkbox takes true or false; a radio button is selected; number and range inputs take a number; a select picks the first option whose value or visible text equals the value. The element is scrolled into view and focused, then input and change events are sent so page scripts notice the change. File, hidden and button inputs are not supported. Returns the new and the previous value, with password-like fields redacted. Defaults to the active tab; get other tab ids from tabs_context.',
+      inputSchema: formInputInputSchema,
+    },
+    forward('form_input'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the

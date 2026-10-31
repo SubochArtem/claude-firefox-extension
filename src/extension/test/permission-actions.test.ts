@@ -50,6 +50,11 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('find', undefined)).toBe('read_page_content');
   });
 
+  it('maps form_input to type', () => {
+    expect(permissionActionForTool('form_input', { ref: 'ref_1', value: 'x', tabId: 1 })).toBe('type');
+    expect(permissionActionForTool('form_input', undefined)).toBe('type');
+  });
+
   it.each([undefined, null, 'url', 42, ['https://example.com']])('treats non-object args %j as empty', (args) => {
     expect(permissionActionForTool('navigate', args)).toBe('navigate');
     expect(permissionActionForTool('tabs_create', args)).toBeUndefined();
