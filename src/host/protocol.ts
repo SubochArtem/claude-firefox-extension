@@ -70,8 +70,36 @@ export interface PermissionResponse {
   includeSubdomains: boolean;
 }
 
-export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest;
-export type HostToExtensionMessage = { type: 'pong' } | ToolRequest | PermissionResponse;
+// Must match BIDI_INPUT_TIMEOUT_MS in extension/protocol.ts.
+export const BIDI_INPUT_TIMEOUT_MS = 60_000;
+export const MAX_BIDI_INPUT_SOURCES = 16;
+export const MAX_BIDI_INPUT_ACTIONS = 10_000;
+export const MAX_BIDI_INPUT_URL_LENGTH = 65_536;
+const MARKER_NAME = /^[A-Za-z_][A-Za-z0-9_]{7,63}$/;
+const MARKER_VALUE = /^[0-9a-f]{32,128}$/;
+
+// A property the extension has set on `window` in the main world of the tab's top frame, so the
+// host can find the tab's WebDriver BiDi browsing context.
+export interface TabMarker {
+  name: string;
+  value: string;
+}
+
+// Asks the host to run WebDriver BiDi input.performActions with `actions` in the tab carrying `marker`.
+export interface BidiInputRequest {
+  type: 'bidi_input_request';
+  requestId: string;
+  marker: TabMarker;
+  url: string;
+  actions: Record<string, unknown>[];
+}
+
+export type BidiInputResponse =
+  | { type: 'bidi_input_response'; requestId: string; ok: true }
+  | { type: 'bidi_input_response'; requestId: string; ok: false; error: string };
+
+export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest;
+export type HostToExtensionMessage = { type: 'pong' } | ToolRequest | PermissionResponse | BidiInputResponse;
 
 export function textOutput(text: string): ToolOutput {
   return { content: [{ type: 'text', text }] };
@@ -131,8 +159,42 @@ export function parsePermissionResponse(value: unknown): PermissionResponse | un
   return { type: 'permission_response', requestId, answer, includeSubdomains };
 }
 
+function parseMarker(value: unknown): TabMarker | undefined {
+  if (!isRecord(value)) return undefined;
+  const { name, value: markerValue } = value;
+  if (typeof name !== 'string' || !MARKER_NAME.test(name)) return undefined;
+  if (typeof markerValue !== 'string' || !MARKER_VALUE.test(markerValue)) return undefined;
+  return { name, value: markerValue };
+}
+
+// Only the outer shape is checked; Firefox validates the actions themselves.
+function parseInputSources(value: unknown): Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_BIDI_INPUT_SOURCES) return undefined;
+  let total = 0;
+  for (const source of value) {
+    if (!isRecord(source) || typeof source['type'] !== 'string' || typeof source['id'] !== 'string') return undefined;
+    const actions = source['actions'];
+    if (!Array.isArray(actions) || !actions.every(isRecord)) return undefined;
+    total += actions.length;
+    if (total > MAX_BIDI_INPUT_ACTIONS) return undefined;
+  }
+  return value as Record<string, unknown>[];
+}
+
+export function parseBidiInputRequest(value: unknown): BidiInputRequest | undefined {
+  if (!isRecord(value) || value['type'] !== 'bidi_input_request') return undefined;
+  const { requestId, url } = value;
+  if (!isField(requestId)) return undefined;
+  if (typeof url !== 'string' || url.length > MAX_BIDI_INPUT_URL_LENGTH) return undefined;
+  const marker = parseMarker(value['marker']);
+  const actions = parseInputSources(value['actions']);
+  if (!marker || !actions) return undefined;
+  return { type: 'bidi_input_request', requestId, marker, url, actions };
+}
+
 export function parseExtensionMessage(value: unknown): ExtensionToHostMessage | undefined {
   if (isRecord(value) && value['type'] === 'ping') return { type: 'ping' };
   if (isRecord(value) && value['type'] === 'permission_request') return parsePermissionRequest(value);
+  if (isRecord(value) && value['type'] === 'bidi_input_request') return parseBidiInputRequest(value);
   return parseToolResponse(value);
 }

@@ -37,6 +37,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Screenshots: one `computer` tool whose action enum grows per feature; `tabs.captureTab` without activating the tab, fitted to 1568 px / 1568 tokens, JPEG quality stepped down to fit about 1 MB; `<all_urls>` granted manually in about:addons until `feature/permissions`; see [Screenshots](docs/decisions.md#screenshots).
 - Tab scope: the agent may navigate and close any tab in any normal window (user decision); with `feature/permissions` every action on a site is checked against that site's permission.
 - Permissions: per-site (host, optional subdomain wildcard) allow/deny once/always records in `storage.local`, deny wins, only http(s) URLs; agent tabs in a "Claude" container by default; see [Permissions](docs/decisions.md#permissions).
+- Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events in a later pull request (its results carry a warning); the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated; see [Input](docs/decisions.md#input-webdriver-bidi).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
@@ -50,6 +51,7 @@ Full text: [Threat model](docs/decisions.md#threat-model).
 - Trusted: any process of the same OS user, Administrators, SYSTEM and root.
 - Before distribution: the extension id is not reserved on AMO; fixed by `feature/amo-signing`.
 - Next major risk: prompt injection from page content; `feature/permissions` must land before `feature/accessibility-tree` and `feature/devtools-tools`.
+- Accepted: the `--remote-debugging-port` endpoint is unauthenticated and reachable by any local process, including other OS users; with the flag Firefox shows the robot icon and striped URL bar and sets `navigator.webdriver=true` on every page even without a session.
 - Accepted by design: `navigate` and `tabs_close` work on any tab, including the user's; every action on a site needs that site's permission (enforced since `feature/permissions-prompt`).
 
 ## Roadmap
@@ -88,7 +90,7 @@ src/                   npm package root; every command is run from here
   vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), scripts
   scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js and page/page-text.js) into dist/extension and host/ into dist/host
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
-  scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows
+  scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows; remote debugging start note
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
   scripts/test/        installer tests (against a temp HOME), e2e safety tests
@@ -135,6 +137,7 @@ src/                   npm package root; every command is run from here
       computer.ts      computer tool, actions screenshot and zoom: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
       input-keys.ts    key text parsing: WebDriver key values, chords and modifier aliases, typed text to key values, page zoom and reload shortcut detection
       input-actions.ts  WebDriver BiDi input.performActions sources for key, type, click, hover, drag and scroll, modifiers held tick-aligned with the pointer
+      bidi-input.ts    performInput: marks the tab in the page's main world, asks the native host to run BiDi input, removes the marker; request channel over the native port
       read-page-input.ts  pure argument validation for read_page
       read-page.ts     read_page tool: options, result check and output on top of page-script.ts
       page-script.ts   shared runner for page bundles: site gate for the tool's action, landed-site re-checks, injects the bundle only when missing, restricted page and timeout errors
@@ -148,17 +151,19 @@ src/                   npm package root; every command is run from here
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included
-    test/              unit, process and fake-timer tests; helpers.ts (temp dirs, endpoints, fake extension), global-setup.ts
+    test/              unit, process and fake-timer tests; helpers.ts (temp dirs, endpoints, fake extension), fake-bidi.ts (WebDriver BiDi WebSocket server), global-setup.ts
     index.ts           dispatches by flag: --native-host or --mcp
     protocol.ts        message types for both channels, shared constants
     socket-path.ts     bridge socket path resolution and permissions; random pipe names on Windows
     bridge-info.ts     bridge.json location, atomic write, validated read, removal on exit
     handshake.ts       bridge handshake: nonces, HMAC proofs, message parsers, limits, client side on a socket
     host-probe.ts      authenticated liveness probe of the host named in bridge.json (Windows second-host check)
+    bidi-client.ts     WebDriver BiDi WebSocket client: port from CLAUDE_FIREFOX_BIDI_PORT, commands with timeouts, connection error messages
+    bidi-input.ts      one BiDi session per input request: finds the marked tab's context, performActions, release and session.end in finally; serial queue
     listen.ts          listen on an endpoint, retrying fresh endpoints on EADDRINUSE
     json-lines.ts      newline-delimited JSON framing on the bridge socket
     native-messaging.ts  Firefox native messaging stdio framing
-    native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients, routes permission requests
+    native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients, routes permission requests, runs BiDi input requests
     mcp-server.ts      MCP server over stdio: registers tools, forwards calls to the native host, asks permissions by elicitation
   node_modules/        (not committed)
   dist/extension/      built extension, loaded by web-ext (not committed)

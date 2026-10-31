@@ -1,6 +1,7 @@
 import { type ClientApprovals, createClientApprovals } from './permissions/client-prompt';
 import { type ExtensionToHostMessage, NATIVE_HOST_NAME, parseHostMessage } from './protocol';
 import { executeTool } from './tools';
+import { type BidiInputChannel, createBidiInputChannel } from './tools/bidi-input';
 
 const PONG_TIMEOUT_MS = 5_000;
 const INITIAL_RETRY_DELAY_MS = 1_000;
@@ -16,6 +17,8 @@ const RECONNECT_ALARM_PERIOD_MINUTES = 0.5;
 let port: browser.runtime.Port | undefined;
 // Permission prompts answered in the MCP client over the current port; denied when the port goes.
 let clientApprovals: ClientApprovals | undefined;
+// WebDriver BiDi input requests run by the native host over the current port; failed when the port goes.
+let bidiInput: BidiInputChannel | undefined;
 let pongTimer: ReturnType<typeof setTimeout> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let stableTimer: ReturnType<typeof setTimeout> | undefined;
@@ -27,6 +30,7 @@ export function connect(): void {
   const current = browser.runtime.connectNative(NATIVE_HOST_NAME);
   port = current;
   clientApprovals = createClientApprovals((message) => send(current, message));
+  bidiInput = createBidiInputChannel((message) => send(current, message));
   current.onMessage.addListener((message) => handleMessage(current, message));
   current.onDisconnect.addListener(() => {
     // Firefox reports why a port closed on port.error, not on runtime.lastError as Chrome does.
@@ -68,6 +72,10 @@ function handleMessage(source: browser.runtime.Port, message: unknown): void {
     clientApprovals?.handleResponse(parsed);
     return;
   }
+  if (parsed.type === 'bidi_input_response') {
+    bidiInput?.handleResponse(parsed);
+    return;
+  }
   void executeTool(parsed, clientApprovals).then((response) => {
     if (source === port) send(source, response);
   });
@@ -78,6 +86,8 @@ function handleLoss(lost: browser.runtime.Port): void {
   port = undefined;
   clientApprovals?.close();
   clientApprovals = undefined;
+  bidiInput?.close();
+  bidiInput = undefined;
   clearTimeout(pongTimer);
   pongTimer = undefined;
   clearTimeout(stableTimer);

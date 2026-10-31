@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { mockBrowser } from './browser-mock';
 
 const RECONNECT_ALARM = 'reconnect-native-host';
@@ -346,6 +346,51 @@ describe('permission prompts through the MCP client', () => {
     await flushPromises();
     expect(permissionRequests(port)).toEqual([]);
     expect(browserMock.windows.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('bidi input channel', () => {
+  // No tool sends input yet, so the channel the bridge creates per port is captured from the factory.
+  async function bridgeWithChannels() {
+    const channels: import('../tools/bidi-input').BidiInputChannel[] = [];
+    vi.resetModules();
+    vi.doMock('../tools/bidi-input', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../tools/bidi-input')>();
+      return {
+        ...original,
+        createBidiInputChannel: (send: Parameters<typeof original.createBidiInputChannel>[0]) => {
+          const channel = original.createBidiInputChannel(send);
+          channels.push(channel);
+          return channel;
+        },
+      };
+    });
+    bridge = await import('../native-bridge');
+    onTestFinished(() => {
+      vi.doUnmock('../tools/bidi-input');
+    });
+    return channels;
+  }
+
+  const MARKER = { name: '__claudeTabMarker_0123456789abcdef', value: 'd'.repeat(32) };
+
+  it('sends input requests over the port and routes the responses back', async () => {
+    const channels = await bridgeWithChannels();
+    const port = connectAndPong();
+    const result = channels[0]?.request({ marker: MARKER, url: 'https://a.example/', actions: [] });
+    const sent = port.postMessage.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(sent).toEqual({ type: 'bidi_input_request', requestId: expect.any(String), marker: MARKER, url: 'https://a.example/', actions: [] });
+    port.emitMessage({ type: 'bidi_input_response', requestId: sent['requestId'], ok: false, error: 'no tab' });
+    await expect(result).resolves.toEqual({ ok: false, error: 'no tab' });
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('fails pending input requests when the port disconnects', async () => {
+    const channels = await bridgeWithChannels();
+    const port = connectAndPong();
+    const result = channels[0]?.request({ marker: MARKER, url: 'https://a.example/', actions: [] });
+    port.emitDisconnect();
+    await expect(result).resolves.toEqual({ ok: false, error: 'The native host disconnected before the input finished' });
   });
 });
 

@@ -190,6 +190,26 @@ export function windowsMcpAddHint(nodePath, hostEntry) {
   return `claude mcp add firefox -- "${nodePath}" "${hostEntry}" --mcp`;
 }
 
+const FIREFOX_COMMANDS = {
+  win32: '"C:\\Program Files\\Mozilla Firefox\\firefox.exe" --remote-debugging-port=9222',
+  darwin: '/Applications/Firefox.app/Contents/MacOS/firefox --remote-debugging-port=9222',
+  linux: 'firefox --remote-debugging-port=9222',
+};
+
+/**
+ * Must match DEFAULT_BIDI_PORT and BIDI_PORT_ENV in host/bidi-client.ts.
+ * @param {NodeJS.Platform} platform
+ * @returns {string[]}
+ */
+export function remoteDebuggingNote(platform) {
+  const command = platform === 'win32' || platform === 'darwin' ? FIREFOX_COMMANDS[platform] : FIREFOX_COMMANDS.linux;
+  return [
+    'Clicks and typing need Firefox started with WebDriver BiDi on port 9222. Close every Firefox window, then run:',
+    `  ${command}`,
+    'To use another port, start Firefox with that port and set CLAUDE_FIREFOX_BIDI_PORT to it in the environment Firefox is started from.',
+  ];
+}
+
 /**
  * @param {string} path
  * @returns {Promise<Buffer | undefined>}

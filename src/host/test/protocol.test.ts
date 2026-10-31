@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   denyPermission,
+  MAX_BIDI_INPUT_ACTIONS,
+  MAX_BIDI_INPUT_SOURCES,
+  MAX_BIDI_INPUT_URL_LENGTH,
+  parseBidiInputRequest,
   errorResponse,
   MAX_PERMISSION_FIELD_LENGTH,
   parseExtensionMessage,
@@ -185,5 +189,55 @@ describe('response helpers', () => {
       id: '3',
       error: { content: [{ type: 'text', text: 'failed' }] },
     });
+  });
+});
+
+describe('parseBidiInputRequest', () => {
+  const marker = { name: '__claudeTabMarker_0123456789abcdef', value: 'f'.repeat(32) };
+  const source = { type: 'pointer', id: 'mouse', parameters: { pointerType: 'mouse' }, actions: [{ type: 'pointerDown', button: 0 }] };
+  const valid = { type: 'bidi_input_request', requestId: 'r1', marker, url: 'https://a.example/', actions: [source] };
+
+  it('accepts a well-formed request, passes the actions through and drops unknown fields', () => {
+    expect(parseBidiInputRequest({ ...valid, extra: 1 })).toEqual(valid);
+    expect(parseExtensionMessage(valid)).toEqual(valid);
+  });
+
+  it('accepts the size limits exactly', () => {
+    const sources = Array.from({ length: MAX_BIDI_INPUT_SOURCES }, (_, i) => ({ type: 'key', id: `k${i}`, actions: [] }));
+    expect(parseBidiInputRequest({ ...valid, actions: sources })).toBeDefined();
+    const many = [{ type: 'key', id: 'k', actions: Array.from({ length: MAX_BIDI_INPUT_ACTIONS }, () => ({ type: 'pause' })) }];
+    expect(parseBidiInputRequest({ ...valid, actions: many })).toBeDefined();
+    expect(parseBidiInputRequest({ ...valid, url: 'x'.repeat(MAX_BIDI_INPUT_URL_LENGTH) })).toBeDefined();
+  });
+
+  it.each([
+    ['a missing request id', { ...valid, requestId: undefined }],
+    ['an empty request id', { ...valid, requestId: '' }],
+    ['a non-string url', { ...valid, url: 1 }],
+    ['a too long url', { ...valid, url: 'x'.repeat(MAX_BIDI_INPUT_URL_LENGTH + 1) }],
+    ['a missing marker', { ...valid, marker: undefined }],
+    ['a marker name that is not an identifier', { ...valid, marker: { ...marker, name: 'a"];alert(1);//' } }],
+    ['a short marker name', { ...valid, marker: { ...marker, name: 'abc' } }],
+    ['a marker value that is not hex', { ...valid, marker: { ...marker, value: 'g'.repeat(32) } }],
+    ['a short marker value', { ...valid, marker: { ...marker, value: 'ab' } }],
+    ['actions that are not an array', { ...valid, actions: source }],
+    ['no sources', { ...valid, actions: [] }],
+    ['too many sources', { ...valid, actions: Array.from({ length: MAX_BIDI_INPUT_SOURCES + 1 }, () => source) }],
+    ['a source without an id', { ...valid, actions: [{ ...source, id: undefined }] }],
+    ['a source without a type', { ...valid, actions: [{ ...source, type: undefined }] }],
+    ['a source whose actions are not an array', { ...valid, actions: [{ ...source, actions: {} }] }],
+    ['a source with a non-object action', { ...valid, actions: [{ ...source, actions: ['pointerDown'] }] }],
+    [
+      'too many actions in total',
+      {
+        ...valid,
+        actions: [
+          { type: 'key', id: 'a', actions: Array.from({ length: MAX_BIDI_INPUT_ACTIONS }, () => ({ type: 'pause' })) },
+          { type: 'key', id: 'b', actions: [{ type: 'pause' }] },
+        ],
+      },
+    ],
+  ])('rejects %s', (_label, value) => {
+    expect(parseBidiInputRequest(value)).toBeUndefined();
   });
 });
