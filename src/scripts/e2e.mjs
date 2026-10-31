@@ -703,6 +703,28 @@ async function main() {
     }
   });
 
+  await step('find of a background tab through the MCP server, its ref used with read_page', async () => {
+    const client = mcpClient;
+    check(client !== undefined, 'no MCP client');
+    const created = await client.callTool({ name: 'tabs_create', arguments: { url: pageUrl } });
+    const createdText = resultText(created);
+    const tabId = Number(/^Created tab (\d+) /.exec(createdText)?.[1]);
+    check(!created.isError && Number.isInteger(tabId), `tabs_create failed: ${createdText}`);
+    try {
+      const found = await client.callTool({ name: 'find', arguments: { tabId, query: `${PAGE_BUTTON} button` } });
+      const text = resultText(found);
+      check(!found.isError && text.startsWith('Found '), `find failed: ${text}`);
+      const button = new RegExp(`^- (ref_\\d+): button "${PAGE_BUTTON}" - `, 'm').exec(text.split('\n')[1] ?? '');
+      check(button !== null, `find did not rank the button first: ${text}`);
+      const read = await client.callTool({ name: 'read_page', arguments: { tabId, ref_id: button[1] } });
+      const readText = resultText(read);
+      check(!read.isError && readText.startsWith(`button "${PAGE_BUTTON}" [${button[1]}]`), `read_page ref_id failed: ${readText}`);
+      return `${button[1]} usable with read_page`;
+    } finally {
+      await client.callTool({ name: 'tabs_close', arguments: { tabId } });
+    }
+  });
+
   await step('get_page_text of a background tab through the MCP server', async () => {
     const client = mcpClient;
     check(client !== undefined, 'no MCP client');

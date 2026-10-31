@@ -25,6 +25,7 @@ export function permissionActionForTool(tool: string, args: unknown): Permission
       return params.action === 'screenshot' || params.action === 'zoom' ? 'read_page_content' : undefined;
     case 'read_page':
     case 'get_page_text':
+    case 'find':
       return 'read_page_content';
     default:
       return undefined;

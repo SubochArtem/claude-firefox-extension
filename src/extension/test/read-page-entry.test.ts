@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest';
 import { installReadPage } from '../page/read-page';
+import { FIND_ENTRY, type FindEntry } from '../page/find-api';
 import { READ_PAGE_ENTRY, type ReadPageEntry } from '../page/read-page-api';
 
 const OPTIONS = { filter: 'all', depth: 15, maxChars: 50_000 } as const;
@@ -49,5 +50,16 @@ describe('installReadPage', () => {
     installReadPage(scope, document, window);
     const result = entryOf(scope)({ ...OPTIONS, refId: 'ref_999' });
     expect(result).toEqual({ ok: false, error: expect.stringMatching(/^ref_999 was not found in this page/) });
+  });
+
+  it('installs find with the same registry, so its refs work with read_page', () => {
+    const scope: Record<string, unknown> = {};
+    installReadPage(scope, document, window);
+    const find = scope[FIND_ENTRY] as FindEntry;
+    document.body.innerHTML = '<h1>Shop</h1><button>Buy now</button>';
+    const result = find({ query: 'buy now' });
+    expect(result).toEqual({ ok: true, text: expect.stringMatching(/^Found 1 matching element\n- ref_\d+: button "Buy now"/) });
+    const ref = result.ok ? (/ref_\d+/.exec(result.text)?.[0] ?? '') : '';
+    expect(entryOf(scope)({ ...OPTIONS, refId: ref })).toMatchObject({ ok: true, tree: `button "Buy now" [${ref}]` });
   });
 });
