@@ -21,6 +21,7 @@
     "@types/firefox-webext-browser": "^143.0.1",
     "@types/node": "^26.6.5",
     "esbuild": "^0.28.2",
+    "happy-dom": "^21.0.4",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5",
     "web-ext": "^10.8.0"
