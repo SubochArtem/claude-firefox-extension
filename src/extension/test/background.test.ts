@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { connect, RECONNECT_ALARM } = vi.hoisted(() => ({ connect: vi.fn(), RECONNECT_ALARM: 'reconnect-native-host' }));
+const { bidiChannels, connect, RECONNECT_ALARM } = vi.hoisted(() => ({
+  bidiChannels: vi.fn(() => ({})),
+  connect: vi.fn(),
+  RECONNECT_ALARM: 'reconnect-native-host',
+}));
 
-vi.mock('../native-bridge', () => ({ connect, RECONNECT_ALARM }));
+vi.mock('../native-bridge', () => ({ bidiChannels, connect, RECONNECT_ALARM }));
 
 function listenerList<Listener>() {
   const listeners: Listener[] = [];
@@ -52,11 +56,11 @@ beforeEach(async () => {
 });
 
 describe('background script', () => {
-  it('connects once at load and registers the prompt and options message listeners', async () => {
+  it('connects once at load and registers the prompt, options and sidebar message listeners', async () => {
     const { handlePromptMessage } = await import('../permissions/popup-prompt');
     const { handleOptionsMessage } = await import('../options/options-messages');
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(onMessage.listeners).toEqual([handlePromptMessage, handleOptionsMessage]);
+    expect(onMessage.listeners).toEqual([handlePromptMessage, handleOptionsMessage, expect.any(Function)]);
     expect(onStartup.listeners).toEqual([connect]);
   });
 
@@ -88,13 +92,13 @@ describe('background script', () => {
     alarmListener?.({ name: RECONNECT_ALARM });
     alarmListener?.({ name: RECONNECT_ALARM });
     expect(connect).toHaveBeenCalledTimes(3);
-    expect(onMessage.listeners).toHaveLength(2);
+    expect(onMessage.listeners).toHaveLength(3);
   });
 
   it('ignores other alarms', () => {
     const [alarmListener] = onAlarm.listeners;
     alarmListener?.({ name: 'something-else' });
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(onMessage.listeners).toHaveLength(2);
+    expect(onMessage.listeners).toHaveLength(3);
   });
 });

@@ -91,12 +91,13 @@ src/                   npm package root; every command is run from here
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
   vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), shared, scripts
   scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js, page/page-text.js and page/console-capture.js) into dist/extension and host/ into dist/host
+  scripts/bundle-guard.mjs  metafile inputs from an npm package; the build fails when the extension bundle includes zod
   scripts/build-time-modules.mjs  esbuild plugin: runs listed modules in Node at build time and inlines their exports as JSON (shared/anthropic-tools.ts in the extension build, so zod is not shipped)
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows; remote debugging start note
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
-  scripts/test/        installer tests (against a temp HOME), e2e safety tests, build-time module tests
+  scripts/test/        installer tests (against a temp HOME), e2e safety tests, build-time module and bundle guard tests
   shared/              code used by both host and extension
     tsconfig.json      shared type check (no DOM, no Node), test/ included
     test/              tests of the Anthropic tool definitions
@@ -112,10 +113,14 @@ src/                   npm package root; every command is run from here
       anthropic-provider.ts  Anthropic Messages API over fetch: streamed request with cache_control on the last tool and system block, SSE event assembly into text and tool_use blocks, HTTP and stream errors, idle watchdog, abort
       sse.ts           server-sent events parser over decoded text, chunks split anywhere
       chat-errors.ts   ChatApiError (status, API error type, retryable) and ChatAbortError
+      agent-loop.ts    agent loop: turns while tool_use, tool calls in order, 50 turn cap, retries of retryable API errors with backoff, old screenshots trimmed from requests, cancellation with "cancelled by user" results
+      system-prompt.ts  system blocks: guidance (tools, untrusted page content, site permissions), date, model, platform and shortcut modifier, bound tab
     options/           options page (about:addons): agent tabs switch, sidebar chat API key, model and api.anthropic.com access, stored site permissions with Revoke
       options.html, options.ts  the page: renders with textContent, live refresh on storage changes
       options-view.ts  pure rows for the permission list, saved API key status (last 4 characters only)
       options-messages.ts  background handler for revoke requests from the options page
+    sidebar/           sidebar chat
+      sidebar-messages.ts  background handler for the sidebar's tool calls: sender check (sidebar page only), tool registry with the popup prompt and the native port's BiDi channels, results as text and image blocks
     page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
       element-role.ts  role from the role attribute or the tag, interactive check, heading level

@@ -1,6 +1,7 @@
-import { connect, RECONNECT_ALARM } from './native-bridge';
+import { bidiChannels, connect, RECONNECT_ALARM } from './native-bridge';
 import { handleOptionsMessage } from './options/options-messages';
 import { handlePromptMessage } from './permissions/popup-prompt';
+import { createSidebarMessageHandler } from './sidebar/sidebar-messages';
 import { registerConsoleTracking } from './tools/console-tracking';
 import { registerNetworkTracking } from './tools/network-tracking';
 
@@ -20,6 +21,7 @@ browser.alarms.onAlarm.addListener((alarm) => {
 
 browser.runtime.onMessage.addListener(handlePromptMessage);
 browser.runtime.onMessage.addListener(handleOptionsMessage);
+browser.runtime.onMessage.addListener(createSidebarMessageHandler(bidiChannels));
 registerConsoleTracking();
 registerNetworkTracking();
 
