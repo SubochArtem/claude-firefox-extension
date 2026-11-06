@@ -200,6 +200,12 @@ export function dragActions(start: Point, end: Point): ParseResult<InputSource[]
   };
 }
 
+export function scrollDelta(direction: ScrollDirection, ticks: number): { deltaX: number; deltaY: number } {
+  const vector = SCROLL_VECTORS[direction];
+  const distance = ticks * SCROLL_TICK_PX;
+  return { deltaX: vector.x * distance, deltaY: vector.y * distance };
+}
+
 export function scrollActions({ point, direction, amount = DEFAULT_SCROLL_AMOUNT }: ScrollOptions): ParseResult<
   InputSource[]
 > {
@@ -207,8 +213,7 @@ export function scrollActions({ point, direction, amount = DEFAULT_SCROLL_AMOUNT
   if (!target.ok) return target;
   const ticks = checkInteger(amount, 'scroll amount', MAX_SCROLL_AMOUNT);
   if (!ticks.ok) return ticks;
-  const vector = SCROLL_VECTORS[direction];
-  const distance = ticks.value * SCROLL_TICK_PX;
+  const { deltaX, deltaY } = scrollDelta(direction, ticks.value);
   return {
     ok: true,
     value: [
@@ -220,8 +225,8 @@ export function scrollActions({ point, direction, amount = DEFAULT_SCROLL_AMOUNT
             type: 'scroll',
             x: target.value.x,
             y: target.value.y,
-            deltaX: vector.x * distance,
-            deltaY: vector.y * distance,
+            deltaX,
+            deltaY,
             origin: 'viewport',
             duration: 0,
           },

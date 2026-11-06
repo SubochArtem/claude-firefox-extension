@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BIDI_INPUT_TIMEOUT_MS as HOST_BIDI_INPUT_TIMEOUT_MS, parseBidiInputRequest } from '../../host/protocol';
 import { BIDI_INPUT_TIMEOUT_MS, type BidiInputRequest } from '../protocol';
-import { type BidiInputChannel, createBidiInputChannel, newTabMarker, performInput } from '../tools/bidi-input';
+import {
+  type BidiInputChannel,
+  type BidiInputResult,
+  BidiUnavailableError,
+  createBidiInputChannel,
+  newTabMarker,
+  performInput,
+} from '../tools/bidi-input';
 import type { InputSource } from '../tools/input-actions';
 import { ToolError } from '../tools/tool-error';
 import { mockBrowser } from './browser-mock';
@@ -74,6 +81,14 @@ describe('bidi input channel', () => {
     expect(second.state).toEqual({ settled: true, value: { ok: false, error: 'no tab' } });
   });
 
+  it('keeps the unavailable flag of a failed response', async () => {
+    const { request, channel } = setupChannel();
+    const { state, requestId } = request();
+    channel.handleResponse({ type: 'bidi_input_response', requestId, ok: false, error: 'no port', unavailable: true });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(state.value).toEqual({ ok: false, error: 'no port', unavailable: true });
+  });
+
   it('fails a request the host does not answer in time and ignores a late answer', async () => {
     const { request, channel } = setupChannel();
     const { state, requestId } = request();
@@ -125,7 +140,7 @@ describe('performInput', () => {
     });
   });
 
-  function channelAnswering(answer: (request: Parameters<BidiInputChannel['request']>[0]) => { ok: true } | { ok: false; error: string }) {
+  function channelAnswering(answer: (request: Parameters<BidiInputChannel['request']>[0]) => BidiInputResult) {
     const seen: { marker: unknown; markerOnPage: unknown }[] = [];
     const channel: BidiInputChannel = {
       request: vi.fn(async (input) => {
@@ -159,7 +174,17 @@ describe('performInput', () => {
     const { channel } = channelAnswering(() => ({ ok: false, error: 'Firefox is not listening for WebDriver BiDi on port 9222.' }));
     const error = await performInput(channel, 7, URL_A, ACTIONS).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(ToolError);
+    expect(error).not.toBeInstanceOf(BidiUnavailableError);
     expect((error as Error).message).toBe('Firefox is not listening for WebDriver BiDi on port 9222.');
+    expect(Object.getOwnPropertyNames(page)).toEqual([]);
+  });
+
+  it('throws BidiUnavailableError with the host cause when BiDi is unavailable', async () => {
+    const { channel } = channelAnswering(() => ({ ok: false, error: 'No port.', unavailable: true }));
+    const error = await performInput(channel, 7, URL_A, ACTIONS).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BidiUnavailableError);
+    expect(error).toBeInstanceOf(ToolError);
+    expect((error as Error).message).toBe('No port.');
     expect(Object.getOwnPropertyNames(page)).toEqual([]);
   });
 

@@ -3,7 +3,10 @@ import type { InputSource } from './input-actions';
 import { errorMessage } from './tab-access';
 import { ToolError } from './tool-error';
 
-export type BidiInputResult = { ok: true } | { ok: false; error: string };
+export type BidiInputResult = { ok: true } | { ok: false; error: string; unavailable?: true };
+
+// The native host reported WebDriver BiDi itself as unusable; the message is the host's cause.
+export class BidiUnavailableError extends ToolError {}
 
 // Input requests to the native host over one native port. Never rejects: a timeout, a closed port or a
 // failed send settles the request with an error.
@@ -42,7 +45,10 @@ export function createBidiInputChannel(send: (message: BidiInputRequest) => void
         }
       }),
     handleResponse(response) {
-      pending.get(response.requestId)?.(response.ok ? { ok: true } : { ok: false, error: response.error });
+      const finish = pending.get(response.requestId);
+      if (!finish) return;
+      if (response.ok) finish({ ok: true });
+      else finish({ ok: false, error: response.error, ...(response.unavailable ? { unavailable: true as const } : {}) });
     },
     close() {
       closed = true;
@@ -92,7 +98,7 @@ export async function performInput(
       throw new ToolError(`Failed to send input to tab ${tabId}: ${errorMessage(error)}`);
     }
     const result = await channel.request({ marker, url, actions });
-    if (!result.ok) throw new ToolError(result.error);
+    if (!result.ok) throw result.unavailable ? new BidiUnavailableError(result.error) : new ToolError(result.error);
   } finally {
     await runInMainWorld(tabId, clearMarker, [marker.name]).catch(() => undefined);
   }

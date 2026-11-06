@@ -96,7 +96,7 @@ export interface BidiInputRequest {
 
 export type BidiInputResponse =
   | { type: 'bidi_input_response'; requestId: string; ok: true }
-  | { type: 'bidi_input_response'; requestId: string; ok: false; error: string };
+  | { type: 'bidi_input_response'; requestId: string; ok: false; error: string; unavailable?: true };
 
 export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest;
 export type HostToExtensionMessage = { type: 'pong' } | ToolRequest | PermissionResponse | BidiInputResponse;

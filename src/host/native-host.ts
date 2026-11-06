@@ -10,7 +10,7 @@ import {
   writeBridgeInfo,
   type BridgeInfo,
 } from './bridge-info';
-import { BidiError, bidiPort } from './bidi-client';
+import { BidiError, BidiUnavailableError, bidiPort } from './bidi-client';
 import { createSerialQueue, runBidiInput } from './bidi-input';
 import {
   clientProof,
@@ -297,7 +297,8 @@ async function performBidiInput(request: BidiInputRequest): Promise<BidiInputRes
   } catch (error) {
     if (!(error instanceof BidiError)) console.error(`${LOG} bidi input ${requestId} failed:`, error);
     const text = error instanceof BidiError ? error.message : `WebDriver BiDi input failed: ${String(error)}`;
-    return { type: 'bidi_input_response', requestId, ok: false, error: text };
+    const unavailable = error instanceof BidiUnavailableError ? { unavailable: true as const } : {};
+    return { type: 'bidi_input_response', requestId, ok: false, error: text, ...unavailable };
   }
 }
 

@@ -6,6 +6,7 @@ import { keyActions, typeActions } from './input-actions';
 import { isPageZoomShortcut, reloadShortcut } from './input-keys';
 import { openTabPage, requireSameSite } from './page-script';
 import { errorMessage } from './tab-access';
+import { syntheticKeys } from './synthetic-input';
 import { ToolError } from './tool-error';
 
 const TOOL = 'computer';
@@ -48,13 +49,15 @@ async function key(args: KeyArgs, prompt: ApprovalPrompt, input: BidiInputChanne
   const reloadKind = reloadShortcut(args.text);
   if (reloadKind !== undefined) return reload(args, prompt, reloadKind);
   const actions = built(keyActions(args.text, args.repeat));
+  const synthetic = { kind: 'key' as const, keys: built(syntheticKeys(args.text)), repeat: args.repeat };
   const tab = await openTabPage(TOOL, args.tabId, prompt, KEY_ACCESS);
-  return sendAndReport(tab, KEY_ACCESS, input, actions, pressedText(keyList(args.text), args.repeat));
+  return sendAndReport(tab, KEY_ACCESS, input, actions, synthetic, pressedText(keyList(args.text), args.repeat));
 }
 
 async function type(args: TypeArgs, prompt: ApprovalPrompt, input: BidiInputChannel | undefined): Promise<PointerOutcome> {
   const tab = await openTabPage(TOOL, args.tabId, prompt, TYPE_ACCESS);
-  return sendAndReport(tab, TYPE_ACCESS, input, typeActions(args.text), `Typed "${args.text}"`);
+  const synthetic = { kind: 'type' as const, text: args.text };
+  return sendAndReport(tab, TYPE_ACCESS, input, typeActions(args.text), synthetic, `Typed "${args.text}"`);
 }
 
 // Keyboard input goes to the tab's focused element; the tab is not activated.

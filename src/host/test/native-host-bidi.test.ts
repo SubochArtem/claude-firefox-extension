@@ -66,6 +66,7 @@ describe('native host bidi input requests', () => {
       requestId: 'b1',
       ok: false,
       error: expect.stringContaining(`--remote-debugging-port=${port}`),
+      unavailable: true,
     });
   });
 

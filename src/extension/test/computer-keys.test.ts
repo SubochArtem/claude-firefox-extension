@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalPrompt } from '../permissions/approval';
 import type { ClientApprovals } from '../permissions/client-prompt';
 import { deniedMessage } from '../permissions/site-access';
+import { SYNTHETIC_INPUT_ENTRY, type SyntheticInputEntry, type SyntheticInputResult } from '../page/synthetic-input-api';
 import type { ToolResponse } from '../protocol';
 import { executeTool } from '../tools';
 import type { BidiInputChannel, BidiInputResult } from '../tools/bidi-input';
@@ -9,6 +10,7 @@ import { ZOOM_SHORTCUT_MESSAGE } from '../tools/computer-keys';
 import { inputPageChangedMessage } from '../tools/computer-pointer';
 import { keyActions, typeActions } from '../tools/input-actions';
 import { unapprovedText } from '../tools/navigate';
+import { fallbackWarning } from '../tools/synthetic-input';
 import { mockBrowser } from './browser-mock';
 
 const TAB = 5;
@@ -20,6 +22,8 @@ type Injection = browser.scripting.ScriptInjection<unknown[], unknown>;
 let browserMock: ReturnType<typeof mockBrowser>;
 let tabs: Map<number, Partial<browser.tabs.Tab>>;
 let inputResult: BidiInputResult;
+let synthetic: ReturnType<typeof vi.fn<SyntheticInputEntry>>;
+let syntheticResult: SyntheticInputResult;
 let channel: BidiInputChannel & { request: ReturnType<typeof vi.fn<BidiInputChannel['request']>> };
 
 function sentActions(): unknown[] {
@@ -47,9 +51,16 @@ beforeEach(() => {
   browserMock.permissions.contains.mockResolvedValue(true);
   browserMock.scripting.executeScript.mockImplementation(async (injection: Injection) => {
     if (injection.world === 'MAIN') return [{ frameId: 0, result: undefined }];
-    throw new Error('unexpected page injection');
+    if (injection.files) {
+      vi.stubGlobal(SYNTHETIC_INPUT_ENTRY, synthetic);
+      return [{ frameId: 0, result: undefined }];
+    }
+    const func = injection.func as (...args: unknown[]) => unknown;
+    return [{ frameId: 0, result: func(...(injection.args ?? [])) }];
   });
   inputResult = { ok: true };
+  syntheticResult = { ok: true };
+  synthetic = vi.fn<SyntheticInputEntry>(() => syntheticResult);
   channel = {
     request: vi.fn<BidiInputChannel['request']>(async () => inputResult),
     handleResponse: vi.fn(),
@@ -241,6 +252,56 @@ describe('computer key', () => {
   it('reports a failed input', async () => {
     inputResult = { ok: false, error: 'Firefox was not started with --remote-debugging-port' };
     expect(await failure({ action: 'key', text: 'Enter' })).toBe(inputResult.error);
+  });
+});
+
+describe('computer keyboard: synthetic fallback', () => {
+  const CAUSE = 'Firefox refused a new WebDriver BiDi session (session not created).';
+  const NONE = { ctrl: false, shift: false, alt: false, meta: false };
+
+  beforeEach(() => {
+    inputResult = { ok: false, error: CAUSE, unavailable: true };
+  });
+
+  it('types with synthetic events when BiDi is unavailable and warns about it', async () => {
+    expect(await text({ action: 'type', text: 'Hi\nthere' })).toBe(`Typed "Hi\nthere"\n${fallbackWarning(CAUSE)}`);
+    expect(synthetic).toHaveBeenCalledWith({ kind: 'type', text: 'Hi\nthere' });
+    expect(browserMock.tabs.update).not.toHaveBeenCalled();
+  });
+
+  it('presses keys with DOM key names, modifiers and the repeat count', async () => {
+    expect(await text({ action: 'key', text: 'cmd+a Backspace shift+Tab F2', repeat: 2 })).toBe(
+      `Pressed 4 keys: cmd+a Backspace shift+Tab F2 (repeated 2 times)\n${fallbackWarning(CAUSE)}`,
+    );
+    expect(synthetic).toHaveBeenCalledWith({
+      kind: 'key',
+      keys: [
+        { key: 'a', modifiers: { ...NONE, meta: true } },
+        { key: 'Backspace', modifiers: NONE },
+        { key: 'Tab', modifiers: { ...NONE, shift: true } },
+        { key: 'F2', modifiers: NONE },
+      ],
+      repeat: 2,
+    });
+  });
+
+  it('reports a page with nothing editable focused', async () => {
+    syntheticResult = { ok: false, error: 'No editable element is focused in the page, so nothing was typed.' };
+    expect(await failure({ action: 'type', text: 'x' })).toBe(syntheticResult.error);
+  });
+
+  it('does not fall back on a real input error or a lost native host', async () => {
+    inputResult = { ok: false, error: 'The native host disconnected before the input finished' };
+    expect(await failure({ action: 'type', text: 'x' })).toBe(inputResult.error);
+    expect(await failure({ action: 'key', text: 'Enter' }, false)).toBe(
+      `Failed to send input to tab ${TAB}: the native host is not connected`,
+    );
+    expect(synthetic).not.toHaveBeenCalled();
+  });
+
+  it('still reloads through the tabs API', async () => {
+    expect(await text({ action: 'key', text: 'F5' })).toBe('Executed F5 (reload page)');
+    expect(synthetic).not.toHaveBeenCalled();
   });
 });
 

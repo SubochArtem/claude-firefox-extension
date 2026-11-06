@@ -37,7 +37,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Screenshots: one `computer` tool whose action enum grows per feature; `tabs.captureTab` without activating the tab, fitted to 1568 px / 1568 tokens, JPEG quality stepped down to fit about 1 MB; `<all_urls>` granted manually in about:addons until `feature/permissions`; see [Screenshots](docs/decisions.md#screenshots).
 - Tab scope: the agent may navigate and close any tab in any normal window (user decision); with `feature/permissions` every action on a site is checked against that site's permission.
 - Permissions: per-site (host, optional subdomain wildcard) allow/deny once/always records in `storage.local`, deny wins, only http(s) URLs; agent tabs in a "Claude" container by default; see [Permissions](docs/decisions.md#permissions).
-- Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events in a later pull request (its results carry a warning); the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated, except by `scroll` (Firefox ignores wheel scrolling in background tabs); see [Input](docs/decisions.md#input-webdriver-bidi).
+- Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events (`isTrusted=false`, the result carries a warning) only when the host reports BiDi itself unavailable (closed or non-BiDi port, refused `session.new`, tab's context not found), never for other input errors or a lost native port; the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated, except by `scroll` (Firefox ignores wheel scrolling in background tabs); see [Input](docs/decisions.md#input-webdriver-bidi).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
@@ -68,7 +68,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/screenshot`: screenshots and zoom via `tabs.captureTab`.
 - [x] `feature/permissions`: permission layer against prompt injection (per-site approval, confirmation of sensitive actions); user choice between a dedicated agent container (`contextualIdentities`, isolated cookies and logins) and the normal profile, with default, switch location and per-domain mixing decided at the start; design after researching how Claude in Chrome does it.
 - [x] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
-- [ ] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
+- [x] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
 - [ ] `feature/devtools-tools`: `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`.
 - [ ] `feature/sidebar-chat`: chat in a Firefox sidebar; options decided at its start after checking Anthropic's terms: a sidebar that talks to the user's local Claude Code through the native host (user signs in to Claude Code as usual), or direct Anthropic API calls with the user's API key. Signing in to claude.ai from the extension like Claude in Chrome is not available to third parties.
 - [ ] `feature/packaging`: installation without Node.js for end users: a native host executable and an installer per OS.
@@ -113,7 +113,9 @@ src/                   npm package root; every command is run from here
       form-input-api.ts  form_input entry point name, value and result types shared with the tool
       element-point.ts  ref target for pointer actions: resolves the ref, scrolls it into view (centered, instant), returns its center in viewport CSS pixels
       element-point-api.ts  element point entry point name, options and result types shared with the computer tool
-      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page, find, form_input and element point entry points once per document, sharing one ref registry
+      synthetic-input.ts  fallback input in the page: synthetic pointer, mouse, wheel, keyboard and input events with the default actions that matter (focus, scrolling, text insertion, Enter submit, Backspace/Delete, Tab focus, select all)
+      synthetic-input-api.ts  synthetic input entry point name, options and result types shared with the computer tool
+      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page, find, form_input, element point and synthetic input entry points once per document, sharing one ref registry
       read-page-api.ts  entry point name, script path and result types shared with the tool
       main-text.ts     page text: content root selection, whitespace normalisation, truncation
       page-text.ts     entry of the injected bundle dist/extension/page/page-text.js: installs the get_page_text entry point once per document
@@ -137,14 +139,15 @@ src/                   npm package root; every command is run from here
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
       computer.ts      computer tool: screenshot and zoom (tabs.captureTab, JPEG resize and quality stepping, coordinate frames), wait, dispatch of pointer and keyboard actions, screenshot after scroll
-      computer-pointer.ts  pointer actions of the computer tool: site gate, frame or ref targets, BiDi input, landed-site re-check after the input
+      computer-pointer.ts  pointer actions of the computer tool: site gate, frame or ref targets, BiDi input with the synthetic fallback when BiDi is unavailable, landed-site re-check after the input
       computer-keys.ts  type and key actions of the computer tool: zoom shortcuts refused, reload shortcuts through tabs.reload, other keys and typed text as BiDi input behind the type permission
       input-keys.ts    key text parsing: WebDriver key values, chords and modifier aliases, typed text to key values, page zoom and reload shortcut detection
       input-actions.ts  WebDriver BiDi input.performActions sources for key, type, click, hover, drag and scroll, modifiers held tick-aligned with the pointer
-      bidi-input.ts    performInput: marks the tab in the page's main world, asks the native host to run BiDi input, removes the marker; request channel over the native port
+      bidi-input.ts    performInput: marks the tab in the page's main world, asks the native host to run BiDi input, removes the marker, throws BidiUnavailableError when the host reports BiDi unavailable; request channel over the native port
+      synthetic-input.ts  synthetic input fallback: runs the page entry after the same-site check, DOM key names and modifier flags, the fallback warning
       read-page-input.ts  pure argument validation for read_page
       read-page.ts     read_page tool: options, result check and output on top of page-script.ts
-      page-script.ts   shared runner for page bundles: site gate for the tool's action (openTabPage), landed-site re-checks, injects the bundle only when missing (runOnTabPage), restricted page and timeout errors
+      page-script.ts   shared runner for page bundles: site gate for the tool's action (openTabPage), landed-site re-checks, injects the bundle only when missing (runOnTabPage; changeTabPage for input, checked by the caller), restricted page and timeout errors
       page-text-input.ts  pure argument validation for get_page_text
       page-text.ts     get_page_text tool: title, URL, source element and text of the page
       find-input.ts    pure argument validation for find

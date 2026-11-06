@@ -7,8 +7,10 @@ import { setFormValue } from './form-input';
 import { FORM_INPUT_ENTRY, type FormInputEntry } from './form-input-api';
 import { READ_PAGE_ENTRY, type ReadPageEntry } from './read-page-api';
 import { RefRegistry } from './ref-registry';
+import { syntheticInput } from './synthetic-input';
+import { SYNTHETIC_INPUT_ENTRY, type SyntheticInputEntry } from './synthetic-input-api';
 
-const ENTRIES = [READ_PAGE_ENTRY, FIND_ENTRY, FORM_INPUT_ENTRY, ELEMENT_POINT_ENTRY];
+const ENTRIES = [READ_PAGE_ENTRY, FIND_ENTRY, FORM_INPUT_ENTRY, ELEMENT_POINT_ENTRY, SYNTHETIC_INPUT_ENTRY];
 
 // A second injection keeps the first registry, so refs stay stable.
 // All entries share the registry, so a ref from read_page or find works with every tool that takes refs.
@@ -25,10 +27,12 @@ export function installReadPage(scope: Record<string, unknown>, doc: Document, v
   const find: FindEntry = (options) => findElements(doc, registry, options.query);
   const formInput: FormInputEntry = (options) => setFormValue(registry, options);
   const point: ElementPointEntry = (options) => elementPoint(registry, doc, options);
+  const synthetic: SyntheticInputEntry = (options) => syntheticInput(registry, doc, view, options);
   scope[READ_PAGE_ENTRY] = entry;
   scope[FIND_ENTRY] = find;
   scope[FORM_INPUT_ENTRY] = formInput;
   scope[ELEMENT_POINT_ENTRY] = point;
+  scope[SYNTHETIC_INPUT_ENTRY] = synthetic;
 }
 
 installReadPage(globalThis as unknown as Record<string, unknown>, document, window);

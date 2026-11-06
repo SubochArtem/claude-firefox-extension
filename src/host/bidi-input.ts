@@ -3,6 +3,7 @@ import {
   BIDI_CONNECT_TIMEOUT_MS,
   BidiCommandError,
   BidiError,
+  BidiUnavailableError,
   type BidiConnection,
   connectBidi,
 } from './bidi-client';
@@ -34,7 +35,7 @@ interface TopContext {
 
 function sessionFailure(error: unknown): BidiError {
   if (!(error instanceof BidiCommandError)) return error instanceof BidiError ? error : new BidiError(String(error));
-  return new BidiError(
+  return new BidiUnavailableError(
     `Firefox refused a new WebDriver BiDi session (${error.code}${error.detail ? `: ${error.detail}` : ''}). Firefox allows one WebDriver session at a time, so another WebDriver BiDi or Marionette client is probably connected (test automation such as Selenium, geckodriver, Playwright or Puppeteer). Close it and try again.`,
   );
 }
@@ -95,7 +96,7 @@ export async function findMarkedContext(
   const contexts = parseTree(await connection.command('browsingContext.getTree', { maxDepth: 0 }, timeouts.command));
   const candidates = contexts.filter((context) => context.url === url);
   if (candidates.length === 0) {
-    throw new BidiError(
+    throw new BidiUnavailableError(
       "Could not find the tab in WebDriver BiDi: no top-level browsing context shows the tab's URL. The tab may have navigated or closed; try again.",
     );
   }
@@ -107,7 +108,7 @@ export async function findMarkedContext(
     );
   }
   const unanswered = failures > 0 ? ` (${failures} of ${candidates.length} checked contexts did not answer)` : '';
-  throw new BidiError(
+  throw new BidiUnavailableError(
     `Could not find the tab in WebDriver BiDi: no browsing context carries the tab's marker${unanswered}. The tab may have navigated or closed; try again.`,
   );
 }
