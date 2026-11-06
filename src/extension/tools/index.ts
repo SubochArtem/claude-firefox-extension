@@ -5,6 +5,7 @@ import type { ContentBlock, ToolRequest, ToolResponse } from '../protocol';
 import type { BidiEvaluateChannel } from './bidi-evaluate';
 import type { BidiInputChannel } from './bidi-input';
 import { computer } from './computer';
+import { readConsoleMessages } from './console';
 import { findTool } from './find';
 import { formInputTool } from './form-input';
 import { javascriptTool } from './javascript';
@@ -35,6 +36,7 @@ const tools = new Map<string, ToolHandler>([
   ['form_input', formInputTool],
   ['resize_window', resizeWindow],
   ['javascript_tool', javascriptTool],
+  ['read_console_messages', readConsoleMessages],
 ]);
 
 function errorResponse(id: string, text: string): ToolResponse {

@@ -15,6 +15,7 @@ const entryPoints = [
   'options/options.ts',
   'page/read-page.ts',
   'page/page-text.ts',
+  'page/console-capture.ts',
 ].map((file) => join(srcDir, file));
 const manifest = join(srcDir, 'manifest.json');
 const hostEntryPoint = join(hostSrcDir, 'index.ts');

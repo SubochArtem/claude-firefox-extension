@@ -380,6 +380,32 @@ export const javascriptInputSchema = z.strictObject({
   tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
 });
 
+// The extension enforces the same limits; extension/tools/console-input.ts.
+export const MAX_CONSOLE_MESSAGES_LIMIT = 1000;
+export const MAX_CONSOLE_PATTERN_LENGTH = 500;
+
+export const consoleInputSchema = z.strictObject({
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+  onlyErrors: z
+    .boolean()
+    .optional()
+    .describe('Only console.error calls, uncaught errors and unhandled promise rejections (default false)'),
+  pattern: z
+    .string()
+    .min(1)
+    .max(MAX_CONSOLE_PATTERN_LENGTH)
+    .optional()
+    .describe('Keep only messages matching this case-insensitive regular expression; an invalid expression is matched as plain text'),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_CONSOLE_MESSAGES_LIMIT)
+    .optional()
+    .describe('Maximum number of messages to return, the most recent matching ones, oldest first (default 100)'),
+  clear: z.boolean().optional().describe('Empty the captured messages after reading, so the next call shows only new ones (default false)'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -548,6 +574,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: javascriptInputSchema,
     },
     forward('javascript_tool'),
+  );
+
+  server.registerTool(
+    'read_console_messages',
+    {
+      description:
+        'Read console messages of a page: console.log, info, warn, error and debug calls, uncaught errors and unhandled promise rejections, one line per message with its level and local time, oldest first. Capture starts in a tab on the first call to this tool, so the first call usually returns nothing: reload the page or repeat the action, then call again. Capture restarts with every page load in the tab, so messages from before the last navigation or reload are gone, and messages logged very early in a page load may be missed. Keeps the last 10000 messages per page, each cut at 2000 characters. URL query strings, JWT-like tokens and values after keys like password, token or session are redacted on a best-effort basis. Needs the user\'s permission for the site. Defaults to the active tab; get other tab ids from tabs_context.',
+      inputSchema: consoleInputSchema,
+    },
+    forward('read_console_messages'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the
