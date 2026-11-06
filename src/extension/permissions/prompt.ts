@@ -35,6 +35,11 @@ async function main(): Promise<void> {
   element('host').textContent = reply.host;
   element('action').textContent = `${ACTION_LABELS[reply.action] ?? reply.action} (${reply.action})`;
   element('tool').textContent = reply.tool;
+  if (reply.code !== undefined) {
+    element('code').textContent = reply.code;
+    element('code-label').hidden = false;
+    element('code-row').hidden = false;
+  }
   element('subdomains-label').hidden = !reply.canIncludeSubdomains;
   element('request').hidden = false;
 

@@ -51,6 +51,8 @@ export function permissionActionForTool(tool: string, args: unknown): Permission
       return 'read_page_content';
     case 'form_input':
       return 'type';
+    case 'javascript_tool':
+      return 'execute_javascript';
     default:
       return undefined;
   }

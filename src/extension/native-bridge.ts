@@ -84,7 +84,7 @@ function handleMessage(source: browser.runtime.Port, message: unknown): void {
     bidiEvaluate?.handleResponse(parsed);
     return;
   }
-  void executeTool(parsed, clientApprovals, bidiInput).then((response) => {
+  void executeTool(parsed, clientApprovals, bidiInput, bidiEvaluate).then((response) => {
     if (source === port) send(source, response);
   });
 }

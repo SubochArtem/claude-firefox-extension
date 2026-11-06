@@ -139,6 +139,11 @@ describe('parsePermissionRequest', () => {
     expect(parsePermissionRequest({ ...PERMISSION_REQUEST, extra: 1 })).toEqual(PERMISSION_REQUEST);
   });
 
+  it('keeps a code preview', () => {
+    const request = { ...PERMISSION_REQUEST, tool: 'javascript_tool', action: 'execute_javascript', code: 'document.title' };
+    expect(parsePermissionRequest(request)).toEqual(request);
+  });
+
   it.each([
     ['null', null],
     ['another type', { ...PERMISSION_REQUEST, type: 'permission_response' }],
@@ -151,6 +156,9 @@ describe('parsePermissionRequest', () => {
     ['a string canIncludeSubdomains', { ...PERMISSION_REQUEST, canIncludeSubdomains: 'true' }],
     ['an oversized host', { ...PERMISSION_REQUEST, host: 'a'.repeat(MAX_PERMISSION_FIELD_LENGTH + 1) }],
     ['an oversized requestId', { ...PERMISSION_REQUEST, requestId: 'r'.repeat(MAX_PERMISSION_FIELD_LENGTH + 1) }],
+    ['a numeric code', { ...PERMISSION_REQUEST, code: 1 }],
+    ['an empty code', { ...PERMISSION_REQUEST, code: '' }],
+    ['an oversized code', { ...PERMISSION_REQUEST, code: 'c'.repeat(MAX_PERMISSION_FIELD_LENGTH + 1) }],
   ])('rejects %s', (_label, value) => {
     expect(parsePermissionRequest(value)).toBeUndefined();
   });

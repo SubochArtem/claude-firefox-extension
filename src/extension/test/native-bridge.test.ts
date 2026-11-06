@@ -397,7 +397,7 @@ describe('bidi input channel', () => {
     port.emitMessage(request);
     await flushPromises();
     expect(channels).toHaveLength(1);
-    expect(executeTool).toHaveBeenCalledWith(request, expect.anything(), channels[0]);
+    expect(executeTool).toHaveBeenCalledWith(request, expect.anything(), channels[0], expect.anything());
     expect(port.postMessage).toHaveBeenLastCalledWith({ type: 'tool_response', id: '1:1', result: { content: [] } });
   });
 
@@ -443,6 +443,21 @@ describe('bidi evaluate channel', () => {
     port.emitMessage({ type: 'bidi_evaluate_response', requestId: sent['requestId'], ok: true, value: '2' });
     await expect(result).resolves.toEqual({ ok: true, value: '2' });
     expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('passes the evaluate channel of the port to tool calls', async () => {
+    const executeTool = vi.fn(async (request: { id: string }) => ({ type: 'tool_response', id: request.id, result: { content: [] } }));
+    vi.doMock('../tools', () => ({ executeTool }));
+    onTestFinished(() => {
+      vi.doUnmock('../tools');
+    });
+    const channels = await bridgeWithChannels();
+    const port = connectAndPong();
+    const request = { type: 'tool_request', id: '1:1', tool: 'javascript_tool', args: { action: 'javascript_exec', text: '1' } };
+    port.emitMessage(request);
+    await flushPromises();
+    expect(channels).toHaveLength(1);
+    expect(executeTool).toHaveBeenCalledWith(request, expect.anything(), expect.anything(), channels[0]);
   });
 
   it('fails pending evaluate requests when the port disconnects', async () => {

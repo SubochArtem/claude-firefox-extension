@@ -32,6 +32,15 @@
       }
       dd {
         margin: 0;
+        min-width: 0;
+      }
+      pre {
+        font: 12px/1.3 ui-monospace, monospace;
+        margin: 0;
+        max-height: 8em;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-all;
       }
       label {
         display: block;
@@ -60,6 +69,8 @@
         <dd id="action"></dd>
         <dt>Tool</dt>
         <dd id="tool"></dd>
+        <dt id="code-label" hidden>Code</dt>
+        <dd id="code-row" hidden><pre id="code"></pre></dd>
       </dl>
       <label id="subdomains-label" hidden><input type="checkbox" id="subdomains" /> Include subdomains</label>
       <div class="buttons">

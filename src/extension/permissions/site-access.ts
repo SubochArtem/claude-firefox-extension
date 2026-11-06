@@ -11,6 +11,8 @@ export interface SiteAccessRequest {
   action: PermissionAction;
   // Opens the refusal of a URL outside site permissions, e.g. "Failed to navigate to <url>".
   subject: string;
+  // A preview of the code the tool will run, shown in the prompt.
+  code?: string;
 }
 
 export function blockedMessage(host: string): string {
@@ -51,7 +53,13 @@ async function checkOrPrompt(request: SiteAccessRequest, prompt: ApprovalPrompt,
 }
 
 async function askUser(request: SiteAccessRequest, host: string, prompt: ApprovalPrompt): Promise<string> {
-  const decision = await prompt.requestApproval({ host, url: request.url, tool: request.tool, action: request.action });
+  const decision = await prompt.requestApproval({
+    host,
+    url: request.url,
+    tool: request.tool,
+    action: request.action,
+    ...(request.code === undefined ? {} : { code: request.code }),
+  });
   if (decision.kind === 'timeout') throw new ToolError(timeoutMessage(host));
   const { answer, wildcard } = decision;
   if (answer === 'allow_always' || answer === 'deny_always') {

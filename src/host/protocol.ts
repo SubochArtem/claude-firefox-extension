@@ -60,6 +60,8 @@ export interface PermissionRequest {
   tool: string;
   action: string;
   canIncludeSubdomains: boolean;
+  // A preview of the code the tool will run (javascript_tool), shown with the question.
+  code?: string;
 }
 
 // `answer` is one of PERMISSION_ANSWERS when well formed; the extension validates it and denies otherwise.
@@ -164,10 +166,11 @@ function isField(value: unknown): value is string {
 
 export function parsePermissionRequest(value: unknown): PermissionRequest | undefined {
   if (!isRecord(value) || value['type'] !== 'permission_request') return undefined;
-  const { requestId, callId, host, tool, action, canIncludeSubdomains } = value;
+  const { requestId, callId, host, tool, action, canIncludeSubdomains, code } = value;
   if (!isField(requestId) || !isField(callId) || !isField(host) || !isField(tool) || !isField(action)) return undefined;
   if (typeof canIncludeSubdomains !== 'boolean') return undefined;
-  return { type: 'permission_request', requestId, callId, host, tool, action, canIncludeSubdomains };
+  if (code !== undefined && !isField(code)) return undefined;
+  return { type: 'permission_request', requestId, callId, host, tool, action, canIncludeSubdomains, ...(code === undefined ? {} : { code }) };
 }
 
 export function denyPermission(requestId: string): PermissionResponse {
