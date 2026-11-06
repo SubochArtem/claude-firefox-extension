@@ -55,6 +55,8 @@ export function permissionActionForTool(tool: string, args: unknown): Permission
       return 'execute_javascript';
     case 'read_console_messages':
       return 'read_console_messages';
+    case 'read_network_requests':
+      return 'read_network_requests';
     default:
       return undefined;
   }

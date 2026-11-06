@@ -10,6 +10,7 @@ import { findTool } from './find';
 import { formInputTool } from './form-input';
 import { javascriptTool } from './javascript';
 import { navigate } from './navigate';
+import { readNetworkRequests } from './network';
 import { getPageText } from './page-text';
 import { readPage } from './read-page';
 import { resizeWindow } from './resize-window';
@@ -37,6 +38,7 @@ const tools = new Map<string, ToolHandler>([
   ['resize_window', resizeWindow],
   ['javascript_tool', javascriptTool],
   ['read_console_messages', readConsoleMessages],
+  ['read_network_requests', readNetworkRequests],
 ]);
 
 function errorResponse(id: string, text: string): ToolResponse {

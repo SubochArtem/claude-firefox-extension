@@ -204,11 +204,15 @@ export function mockBrowser() {
   const storage = {
     session: {
       data: sessionData,
-      get: vi.fn<(key: string) => Promise<Record<string, unknown>>>(async (key) =>
-        sessionData.has(key) ? { [key]: structuredClone(sessionData.get(key)) } : {},
-      ),
+      get: vi.fn<(key: string | null) => Promise<Record<string, unknown>>>(async (key) => {
+        if (key === null) return structuredClone(Object.fromEntries(sessionData));
+        return sessionData.has(key) ? { [key]: structuredClone(sessionData.get(key)) } : {};
+      }),
       set: vi.fn<(items: Record<string, unknown>) => Promise<void>>(async (items) => {
         for (const [key, value] of Object.entries(items)) sessionData.set(key, structuredClone(value));
+      }),
+      remove: vi.fn<(key: string) => Promise<void>>(async (key) => {
+        sessionData.delete(key);
       }),
     },
     local: {

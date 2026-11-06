@@ -2,6 +2,7 @@ import { connect, RECONNECT_ALARM } from './native-bridge';
 import { handleOptionsMessage } from './options/options-messages';
 import { handlePromptMessage } from './permissions/popup-prompt';
 import { registerConsoleTracking } from './tools/console-tracking';
+import { registerNetworkTracking } from './tools/network-tracking';
 
 browser.runtime.onInstalled.addListener((details) => {
   const { version } = browser.runtime.getManifest();
@@ -20,5 +21,6 @@ browser.alarms.onAlarm.addListener((alarm) => {
 browser.runtime.onMessage.addListener(handlePromptMessage);
 browser.runtime.onMessage.addListener(handleOptionsMessage);
 registerConsoleTracking();
+registerNetworkTracking();
 
 connect();

@@ -406,6 +406,28 @@ export const consoleInputSchema = z.strictObject({
   clear: z.boolean().optional().describe('Empty the captured messages after reading, so the next call shows only new ones (default false)'),
 });
 
+// The extension enforces the same limits; extension/tools/network-input.ts.
+export const MAX_NETWORK_REQUESTS_LIMIT = 1000;
+export const MAX_NETWORK_URL_PATTERN_LENGTH = 500;
+
+export const networkInputSchema = z.strictObject({
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+  urlPattern: z
+    .string()
+    .min(1)
+    .max(MAX_NETWORK_URL_PATTERN_LENGTH)
+    .optional()
+    .describe('Keep only requests whose URL contains this text, case-insensitive (plain text, matched against the redacted URL)'),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_NETWORK_REQUESTS_LIMIT)
+    .optional()
+    .describe('Maximum number of requests to return, the most recent matching ones, oldest first (default 100)'),
+  clear: z.boolean().optional().describe('Empty the captured requests after reading, so the next call shows only new ones (default false)'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -584,6 +606,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: consoleInputSchema,
     },
     forward('read_console_messages'),
+  );
+
+  server.registerTool(
+    'read_network_requests',
+    {
+      description:
+        'Read the network requests of a tab: one line per request with method, status code (or ERROR with Firefox\'s error text, PENDING, or REDIRECT), resource type, URL and duration, oldest first. Capture starts in a tab on the first call to this tool, so the first call usually returns nothing: reload the page or repeat the action, then call again. Requests are kept across navigations on the same site; the list starts over when the tab moves to another site. Keeps the last 1000 requests per tab. No headers or bodies. URL credentials, query strings and fragments are removed, and JWT-like tokens and values after keys like token or session in the path are redacted on a best-effort basis. Requests made by service workers are not attributed to the tab and are not shown. Needs the user\'s permission for the site. Defaults to the active tab; get other tab ids from tabs_context.',
+      inputSchema: networkInputSchema,
+    },
+    forward('read_network_requests'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the
