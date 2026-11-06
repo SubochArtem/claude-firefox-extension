@@ -81,6 +81,7 @@ describe('permissionActionForTool', () => {
     ['computer', { action: 'Type' }],
     ['computer', {}],
     ['tabs_context', {}],
+    ['resize_window', { width: 800, height: 600, tabId: 1 }],
     ['unknown_tool', {}],
   ])('returns undefined for %s %o', (tool, args) => {
     expect(permissionActionForTool(tool, args)).toBeUndefined();

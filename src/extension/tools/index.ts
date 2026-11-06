@@ -9,6 +9,7 @@ import { formInputTool } from './form-input';
 import { navigate } from './navigate';
 import { getPageText } from './page-text';
 import { readPage } from './read-page';
+import { resizeWindow } from './resize-window';
 import { tabsClose, tabsCreate } from './tabs';
 import { tabsContext } from './tabs-context';
 import { ToolError } from './tool-error';
@@ -25,6 +26,7 @@ const tools = new Map<string, ToolHandler>([
   ['get_page_text', getPageText],
   ['find', findTool],
   ['form_input', formInputTool],
+  ['resize_window', resizeWindow],
 ]);
 
 function errorResponse(id: string, text: string): ToolResponse {

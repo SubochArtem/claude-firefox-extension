@@ -359,6 +359,12 @@ export const formInputInputSchema = z.strictObject({
   tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
 });
 
+export const resizeWindowInputSchema = z.strictObject({
+  width: z.number().min(1).lt(7681).describe('Outer window width in pixels, including the browser frame and toolbars (fractions are floored)'),
+  height: z.number().min(1).lt(4321).describe('Outer window height in pixels, including the browser frame and toolbars (fractions are floored)'),
+  tabId: z.number().int().positive().optional().describe('Id of a tab in the window, from tabs_context; defaults to the active tab'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -507,6 +513,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: formInputInputSchema,
     },
     forward('form_input'),
+  );
+
+  server.registerTool(
+    'resize_window',
+    {
+      description:
+        'Resize the outer Firefox window containing a tab to width x height pixels. The size includes the browser frame, tab strip and toolbars, so the page viewport ends up smaller; read_page reports the viewport size. A maximized, minimized or fullscreen window is set back to normal first. Only normal browser windows can be resized. The tab is not activated and focus is not requested, though restoring a minimized window may raise it. Returns the requested and the actual size, which the window manager or the screen may limit. Defaults to the active tab; get other tab ids from tabs_context.',
+      inputSchema: resizeWindowInputSchema,
+    },
+    forward('resize_window'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the
