@@ -200,6 +200,14 @@ describe('inline styles', () => {
     expect(html('1. a\n   - *nested* **b**')).toBe('<ol><li>a<ul><li><em>nested</em> <strong>b</strong></li></ul></li></ol>');
   });
 
+  it('caps emphasis nesting depth', () => {
+    const container = render('*a '.repeat(50) + 'a* '.repeat(50));
+    let depth = 0;
+    for (let element = container.querySelector('p em'); element; element = element.querySelector(':scope > em')) depth++;
+    expect(depth).toBeGreaterThan(0);
+    expect(depth).toBeLessThanOrEqual(8);
+  });
+
   it('renders emphasis inside link text', () => {
     expect(html('[**bold** link](https://e.com/)')).toBe(`<p><a href="https://e.com/" ${LINK_ATTRS}><strong>bold</strong> link</a></p>`);
   });
@@ -229,6 +237,12 @@ describe('links', () => {
   it('does not link bare URLs longer than the scan limit', () => {
     const url = `https://e.com/${'a'.repeat(5_000)}`;
     expect(render(`see ${url} and https://e.com/b`).querySelectorAll('a')).toHaveLength(1);
+  });
+
+  it('does not link a bare mailto address', () => {
+    const container = render('write to mailto:me@e.com');
+    expect(container.querySelector('a')).toBeNull();
+    expect(container.textContent).toBe('write to mailto:me@e.com');
   });
 
   it('does not link a URL inside inline code', () => {
@@ -263,7 +277,7 @@ describe('unsafe input', () => {
   });
 
   it('renders javascript links as plain text', () => {
-    for (const text of ['[x](javascript:alert(1))', '[x](JaVaScRiPt:alert(1))', '[x](  javascript:alert(1))', '[x](java\tscript:alert(1))']) {
+    for (const text of ['[x](javascript:alert(1))', '[x](JaVaScRiPt:alert(1))', '[x](  javascript:alert(1))', '[x](java\tscript:alert(1))', '[x](javascript&colon;alert(1))', '[x](\u0001javascript:alert(1))']) {
       const container = render(text);
       expect(container.querySelector('a')).toBeNull();
       expect(container.textContent).toBe(text);
@@ -351,7 +365,7 @@ describe('partial streaming input', () => {
   });
 
   it('renders long pathological input in reasonable time', () => {
-    const inputs = ['*a '.repeat(20_000), 'a* '.repeat(20_000), '['.repeat(20_000), '[a]('.repeat(5_000), '`'.repeat(5_000) + ' x ``'.repeat(5_000), '- '.repeat(20_000), 'http://['.repeat(15_000), ('http://['.repeat(500) + ' ').repeat(30)];
+    const inputs = ['*a '.repeat(20_000), 'a* '.repeat(20_000), '['.repeat(20_000), '[a]('.repeat(5_000), '`'.repeat(5_000) + ' x ``'.repeat(5_000), '- '.repeat(20_000), 'http://['.repeat(15_000), ('http://['.repeat(500) + ' ').repeat(30), '*a '.repeat(5_000) + 'a* '.repeat(5_000)];
     const started = Date.now();
     for (const input of inputs) render(input);
     expect(Date.now() - started).toBeLessThan(5_000);

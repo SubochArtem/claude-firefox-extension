@@ -1,5 +1,6 @@
 const MAX_LIST_DEPTH = 2;
 const MAX_QUOTE_DEPTH = 8;
+const MAX_EMPHASIS_DEPTH = 8;
 const LINK_SCAN_LIMIT = 4096;
 const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
 const LANGUAGE = /^[\w+#.-]{1,32}$/;
@@ -275,7 +276,7 @@ interface Delimiter {
   canClose: boolean;
 }
 
-type InlineToken = { kind: 'node'; node: Node } | Delimiter;
+type InlineToken = { kind: 'node'; node: Node; depth?: number } | Delimiter;
 
 function appendInline(parent: Node, text: string, doc: Document, inLink: boolean): void {
   const tokens = tokenizeInline(text, doc, inLink);
@@ -526,12 +527,19 @@ function processEmphasis(tokens: InlineToken[], doc: Document): void {
       continue;
     }
 
+    const inner = tokens.slice(openerIndex + 1, closerIndex);
+    const depth = 1 + inner.reduce((max, token) => Math.max(max, token.kind === 'node' ? (token.depth ?? 0) : 0), 0);
+    if (depth > MAX_EMPHASIS_DEPTH) {
+      for (const [char, index] of bottom) bottom.set(char, Math.max(index, openerIndex + 1));
+      closerIndex++;
+      continue;
+    }
     const used = opener.count >= 2 && closer.count >= 2 ? 2 : 1;
     const element = doc.createElement(used === 2 ? 'strong' : 'em');
-    for (const token of tokens.slice(openerIndex + 1, closerIndex)) appendToken(element, token, doc);
+    for (const token of inner) appendToken(element, token, doc);
     opener.count -= used;
     closer.count -= used;
-    tokens.splice(openerIndex + 1, closerIndex - openerIndex - 1, { kind: 'node', node: element });
+    tokens.splice(openerIndex + 1, closerIndex - openerIndex - 1, { kind: 'node', node: element, depth });
     closerIndex = openerIndex + 2;
     for (const [char, index] of bottom) bottom.set(char, Math.min(index, openerIndex + 1));
   }
