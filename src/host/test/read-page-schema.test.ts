@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { READ_PAGE_FILTERS } from '../../extension/tools/read-page-input';
-import { readPageInputSchema } from '../mcp-server';
+import { readPageInputSchema } from '../../shared/tool-definitions';
 
 describe('readPageInputSchema', () => {
   it.each([

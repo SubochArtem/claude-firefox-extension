@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resizeWindowInputSchema } from '../mcp-server';
+import { resizeWindowInputSchema } from '../../shared/tool-definitions';
 
 describe('resizeWindowInputSchema', () => {
   it.each([

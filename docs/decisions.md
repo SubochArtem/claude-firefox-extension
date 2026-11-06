@@ -202,6 +202,14 @@ If writing or registration fails, files that existed before the run get their pr
   - Reading: `urlPattern` is a case-insensitive plain substring matched against the redacted URL, so query values cannot be probed through the filter; `limit` (default 100, at most 1000) keeps the most recent matching requests, listed oldest first; `clear` empties the list after the read.
   - Output: a summary line (tab, redacted page URL, capture start time, shown, matching and captured counts), then one line per request `METHOD STATUS TYPE URL [N ms]`, with `ERROR <text>`, `REDIRECT` or `PENDING` (no duration) in place of the status; then notes for dropped requests and clearing. The request lines are capped at 100 KB in total like the console tool, keeping the most recent whole lines with a note on how many were omitted. URLs are redacted before they are stored: credentials, the query and the fragment are removed from the whole URL (also when it holds characters that end a URL in free text, such as parentheses), it is cut at 1,000 characters, and the console redaction then catches JWT-like tokens and values after sensitive keys in the path.
 
+## Sidebar chat
+
+- Backend: the sidebar calls the Anthropic Messages API directly from the sidebar page with an API key the user supplies, stored in `storage.local`. A local Claude Code backend through the native host is a later, separate feature. Driving `claude -p` logged in with the user's subscription is a terms gray zone and needs Anthropic's written confirmation first; signing in to claude.ai is not available to third parties.
+- Agent loop: runs in the sidebar page, not in the background script. Closing the sidebar stops it; the conversation history lives until the sidebar closes.
+- API client: own `fetch` with a server-sent events parser, no SDK dependency.
+- Rendering: a minimal own Markdown renderer that builds DOM nodes with `textContent`, never `innerHTML`; no dependencies.
+- Tool definitions: shared between the MCP server and the sidebar. `shared/tool-definitions.ts` holds each tool's name, description and zod input schema; `host/mcp-server.ts` registers the tools from that list. `shared/anthropic-tools.ts` turns the list into Anthropic tool objects `{ name, description, input_schema }` with `z.toJSONSchema` (draft 7, input types: the same options the MCP SDK uses for `tools/list`, so the schemas are identical, checked by a host test). The extension imports `ANTHROPIC_TOOLS` from that module; the extension build replaces the module with its evaluated exports as JSON literals (`scripts/build-time-modules.mjs`, an esbuild plugin that bundles and runs the module in Node), so zod is not shipped in the extension. Vitest and the type check use the module as is.
+
 ## Native host installation paths
 
 `npm run install-host` writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary, and the manifest `claude_firefox_extension.json`:
@@ -223,10 +231,11 @@ TDD where it fits: logic with a spec known up front (protocols, framing, multipl
 ## Tests
 
 - `npm test` needs no build, Firefox or network; it uses temp dirs under `/tmp`, never the real bridge socket directory or `~/.mozilla`.
-- Vitest projects: extension, host (bundles the host once in a global setup), scripts.
+- Vitest projects: extension, host (bundles the host once in a global setup), shared, scripts.
 - `extension/test/`: unit tests with a mocked `browser` global (`browser-mock.ts`); not copied into `dist`. `manifest.test.ts` checks the permissions the tools need.
 - `host/test/`: unit tests, process tests against the bundled host, in-process timeout tests with fake timers. `helpers.ts` provides temp dirs under `/tmp`, endpoints as Unix sockets or Windows pipes from `bridge.json`, a fake extension and a bridge client; `global-setup.ts` bundles the host.
-- `scripts/test/`: installer tests (run a copy of the installer against a temp `HOME`) and e2e safety tests.
+- `shared/test/`: tests of the shared tool definitions.
+- `scripts/test/`: installer tests (run a copy of the installer against a temp `HOME`), e2e safety tests and build-time module tests.
 
 ## CI
 

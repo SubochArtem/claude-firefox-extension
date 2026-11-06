@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_NETWORK_LIMIT, MAX_URL_PATTERN_LENGTH } from '../../extension/tools/network-input';
-import { MAX_NETWORK_REQUESTS_LIMIT, MAX_NETWORK_URL_PATTERN_LENGTH, networkInputSchema } from '../mcp-server';
+import { MAX_NETWORK_REQUESTS_LIMIT, MAX_NETWORK_URL_PATTERN_LENGTH, networkInputSchema } from '../../shared/tool-definitions';
 
 describe('networkInputSchema', () => {
   it('uses the limits of the extension', () => {

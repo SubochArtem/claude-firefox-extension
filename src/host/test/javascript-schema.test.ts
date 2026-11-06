@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_CODE_LENGTH } from '../../extension/tools/javascript-input';
-import { javascriptInputSchema, MAX_JAVASCRIPT_CODE_LENGTH } from '../mcp-server';
+import { javascriptInputSchema, MAX_JAVASCRIPT_CODE_LENGTH } from '../../shared/tool-definitions';
 
 describe('javascriptInputSchema', () => {
   it('uses the code size cap of the extension', () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COMPUTER_ACTIONS } from '../../extension/tools/computer-input';
-import { computerInputSchema } from '../mcp-server';
+import { computerInputSchema } from '../../shared/tool-definitions';
 
 describe('computerInputSchema', () => {
   it('accepts a screenshot with optional tabId and scale', () => {

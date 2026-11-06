@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
-    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p extension && tsc --noEmit -p host",
+    "typecheck": "tsc --noEmit -p . && tsc --noEmit -p extension && tsc --noEmit -p host && tsc --noEmit -p shared",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "web-ext lint",

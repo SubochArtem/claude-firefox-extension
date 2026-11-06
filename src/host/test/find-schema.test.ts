@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findInputSchema } from '../mcp-server';
+import { findInputSchema } from '../../shared/tool-definitions';
 
 describe('findInputSchema', () => {
   it.each([{ query: 'login button' }, { query: 'search box', tabId: 3 }])('accepts %j', (args) => {

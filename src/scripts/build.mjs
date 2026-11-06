@@ -2,12 +2,15 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { cp, readFile, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { build } from 'esbuild';
+import { buildTimeModules } from './build-time-modules.mjs';
 
 const root = join(import.meta.dirname, '..');
 const srcDir = join(root, 'extension');
 const outDir = join(root, 'dist/extension');
 const hostSrcDir = join(root, 'host');
 const hostOutDir = join(root, 'dist/host');
+// Tool definitions reach the extension as JSON, without zod.
+const extensionBuildTimeModules = [join(root, 'shared/anthropic-tools.ts')];
 
 const entryPoints = [
   'background.ts',
@@ -48,6 +51,7 @@ try {
     platform: 'browser',
     target: 'firefox158',
     logLevel: 'warning',
+    plugins: [buildTimeModules(extensionBuildTimeModules)],
   });
   await build({
     entryPoints: [hostEntryPoint],
