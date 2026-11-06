@@ -7,6 +7,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ElicitRequestSchema, type ElicitRequest, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, onTestFinished } from 'vitest';
+import { ANTHROPIC_TOOLS } from '../../shared/anthropic-tools';
+import { TOOL_DEFINITIONS } from '../../shared/tool-definitions';
 import { permissionElicitation } from '../mcp-server';
 import {
   APP_DIR,
@@ -88,6 +90,15 @@ describe('MCP server process', () => {
     expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text', 'find', 'form_input', 'resize_window', 'javascript_tool', 'read_console_messages', 'read_network_requests']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
+  });
+
+  it('lists the shared tool definitions, equal to the Anthropic tool definitions', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    expect(tools.map((tool) => tool.name)).toEqual(TOOL_DEFINITIONS.map((tool) => tool.name));
+    expect(tools.map(({ name, description, inputSchema }) => ({ name, description, input_schema: inputSchema }))).toEqual(
+      ANTHROPIC_TOOLS,
+    );
   });
 
   it('lists navigate with a required integer tabId and string url', async () => {

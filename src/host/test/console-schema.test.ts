@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MAX_CONSOLE_LIMIT, MAX_PATTERN_LENGTH } from '../../extension/tools/console-input';
-import { consoleInputSchema, MAX_CONSOLE_MESSAGES_LIMIT, MAX_CONSOLE_PATTERN_LENGTH } from '../mcp-server';
+import { consoleInputSchema, MAX_CONSOLE_MESSAGES_LIMIT, MAX_CONSOLE_PATTERN_LENGTH } from '../../shared/tool-definitions';
 
 describe('consoleInputSchema', () => {
   it('uses the limits of the extension', () => {

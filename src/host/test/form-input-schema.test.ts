@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formInputInputSchema } from '../mcp-server';
+import { formInputInputSchema } from '../../shared/tool-definitions';
 
 describe('formInputInputSchema', () => {
   it.each([

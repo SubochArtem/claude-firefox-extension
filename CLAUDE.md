@@ -40,6 +40,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events (`isTrusted=false`, the result carries a warning) only when the host reports BiDi itself unavailable (closed or non-BiDi port, refused `session.new`, tab's context not found), never for other input errors or a lost native port; the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated, except by `scroll` (Firefox ignores wheel scrolling in background tabs); see [Input](docs/decisions.md#input-webdriver-bidi).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - DevTools tools: `resize_window` resizes normal windows only, with no site permission, resets the window state to normal and reports the actual size; `javascript_tool` runs through BiDi `script.evaluate` in the page's main realm (bypasses page CSP), falling back to `scripting.executeScript` in the MAIN world only when BiDi is unavailable, behind an `execute_javascript` site permission; console and network capture start per tab on the first read call, console capture through a MAIN-world content script registered at `document_start` for the hosts of tracked tabs, network capture through top-level non-blocking `webRequest` listeners into a per-tab list of 1,000 requests in `storage.session` that starts over when the tab moves to another site; see [DevTools tools](docs/decisions.md#devtools-tools).
+- Sidebar chat: the sidebar page calls the Anthropic Messages API directly with a user-supplied API key in `storage.local` and runs the agent loop itself (closing the sidebar stops it, history lives until then); own fetch + SSE client and own textContent-only Markdown renderer, no dependencies; tool definitions shared with the MCP server; a local Claude Code backend is a later feature, driving a subscription-logged `claude -p` needs Anthropic's written confirmation, claude.ai login is not available to third parties; see [Sidebar chat](docs/decisions.md#sidebar-chat).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -88,13 +89,19 @@ src/                   npm package root; every command is run from here
   tsconfig.base.json   shared strict compiler options (no emit)
   tsconfig.json        type check for build scripts, their tests, web-ext and Vitest config (Node types, no DOM)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
-  vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), scripts
+  vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), shared, scripts
   scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js, page/page-text.js and page/console-capture.js) into dist/extension and host/ into dist/host
+  scripts/build-time-modules.mjs  esbuild plugin: runs listed modules in Node at build time and inlines their exports as JSON (shared/anthropic-tools.ts in the extension build, so zod is not shipped)
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows; remote debugging start note
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
-  scripts/test/        installer tests (against a temp HOME), e2e safety tests
+  scripts/test/        installer tests (against a temp HOME), e2e safety tests, build-time module tests
+  shared/              code used by both host and extension
+    tsconfig.json      shared type check (no DOM, no Node), test/ included
+    test/              tests of the Anthropic tool definitions
+    tool-definitions.ts  every tool's name, description and zod input schema, registered by the MCP server
+    anthropic-tools.ts  ANTHROPIC_TOOLS: the tool definitions as Anthropic tool objects with JSON Schema (z.toJSONSchema, same as the MCP tools/list)
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks, happy-dom tests for page/
@@ -195,7 +202,7 @@ src/                   npm package root; every command is run from here
     json-lines.ts      newline-delimited JSON framing on the bridge socket
     native-messaging.ts  Firefox native messaging stdio framing
     native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients, routes permission requests, runs BiDi input requests
-    mcp-server.ts      MCP server over stdio: registers tools, forwards calls to the native host, asks permissions by elicitation
+    mcp-server.ts      MCP server over stdio: registers the shared tool definitions, forwards calls to the native host, asks permissions by elicitation
   node_modules/        (not committed)
   dist/extension/      built extension, loaded by web-ext (not committed)
   dist/host/index.js   bundled host for Node, run as `node dist/host/index.js --native-host|--mcp` (not committed)
@@ -208,7 +215,7 @@ Run every command from `src/` (`cd src && npm run build`).
 
 - `npm install`: install dependencies.
 - `npm run build`: bundle `extension/` into `dist/extension` and `host/` into `dist/host`.
-- `npm run typecheck`: `tsc --noEmit` for the root project (build scripts, installer tests, Vitest config), `extension/` and `host/` (each with its tests).
+- `npm run typecheck`: `tsc --noEmit` for the root project (build scripts, installer tests, Vitest config), `extension/`, `host/` and `shared/` (each with its tests).
 - `npm test`: run the Vitest suite once (no build, Firefox or network; temp dirs under `/tmp` only). `npm run test:watch` for watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).
 - `npm run start`: run the built extension in a temporary Firefox profile with `web-ext run` (build first).

@@ -21,6 +21,12 @@ export default defineConfig({
       },
       {
         test: {
+          name: 'shared',
+          include: ['shared/test/**/*.test.ts'],
+        },
+      },
+      {
+        test: {
           name: 'scripts',
           include: ['scripts/test/**/*.test.ts'],
         },

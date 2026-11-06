@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pageTextInputSchema } from '../mcp-server';
+import { pageTextInputSchema } from '../../shared/tool-definitions';
 
 describe('pageTextInputSchema', () => {
   it.each([{}, { tabId: 3 }, { tabId: 3, max_chars: 100 }])('accepts %j', (args) => {
