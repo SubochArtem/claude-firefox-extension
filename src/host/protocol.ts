@@ -98,8 +98,33 @@ export type BidiInputResponse =
   | { type: 'bidi_input_response'; requestId: string; ok: true }
   | { type: 'bidi_input_response'; requestId: string; ok: false; error: string; unavailable?: true };
 
-export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest;
-export type HostToExtensionMessage = { type: 'pong' } | ToolRequest | PermissionResponse | BidiInputResponse;
+// Must match BIDI_EVALUATE_TIMEOUT_MS in extension/protocol.ts.
+export const BIDI_EVALUATE_TIMEOUT_MS = 90_000;
+export const MAX_BIDI_EVALUATE_CODE_LENGTH = 1_000_000;
+
+// Asks the host to run `code` with WebDriver BiDi script.evaluate in the main realm of the marked tab.
+export interface BidiEvaluateRequest {
+  type: 'bidi_evaluate_request';
+  requestId: string;
+  marker: TabMarker;
+  url: string;
+  code: string;
+}
+
+// `value` is the formatted result and `exception` the formatted uncaught exception; both are text,
+// since a native message to the extension is limited to 1 MB.
+export type BidiEvaluateResponse =
+  | { type: 'bidi_evaluate_response'; requestId: string; ok: true; value: string }
+  | { type: 'bidi_evaluate_response'; requestId: string; ok: true; exception: string }
+  | { type: 'bidi_evaluate_response'; requestId: string; ok: false; error: string; unavailable?: true };
+
+export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest | BidiEvaluateRequest;
+export type HostToExtensionMessage =
+  | { type: 'pong' }
+  | ToolRequest
+  | PermissionResponse
+  | BidiInputResponse
+  | BidiEvaluateResponse;
 
 export function textOutput(text: string): ToolOutput {
   return { content: [{ type: 'text', text }] };
@@ -192,9 +217,21 @@ export function parseBidiInputRequest(value: unknown): BidiInputRequest | undefi
   return { type: 'bidi_input_request', requestId, marker, url, actions };
 }
 
+export function parseBidiEvaluateRequest(value: unknown): BidiEvaluateRequest | undefined {
+  if (!isRecord(value) || value['type'] !== 'bidi_evaluate_request') return undefined;
+  const { requestId, url, code } = value;
+  if (!isField(requestId)) return undefined;
+  if (typeof url !== 'string' || url.length > MAX_BIDI_INPUT_URL_LENGTH) return undefined;
+  if (typeof code !== 'string' || code.length === 0 || code.length > MAX_BIDI_EVALUATE_CODE_LENGTH) return undefined;
+  const marker = parseMarker(value['marker']);
+  if (!marker) return undefined;
+  return { type: 'bidi_evaluate_request', requestId, marker, url, code };
+}
+
 export function parseExtensionMessage(value: unknown): ExtensionToHostMessage | undefined {
   if (isRecord(value) && value['type'] === 'ping') return { type: 'ping' };
   if (isRecord(value) && value['type'] === 'permission_request') return parsePermissionRequest(value);
   if (isRecord(value) && value['type'] === 'bidi_input_request') return parseBidiInputRequest(value);
+  if (isRecord(value) && value['type'] === 'bidi_evaluate_request') return parseBidiEvaluateRequest(value);
   return parseToolResponse(value);
 }

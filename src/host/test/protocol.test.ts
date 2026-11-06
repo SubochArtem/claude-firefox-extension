@@ -3,7 +3,9 @@ import {
   denyPermission,
   MAX_BIDI_INPUT_ACTIONS,
   MAX_BIDI_INPUT_SOURCES,
+  MAX_BIDI_EVALUATE_CODE_LENGTH,
   MAX_BIDI_INPUT_URL_LENGTH,
+  parseBidiEvaluateRequest,
   parseBidiInputRequest,
   errorResponse,
   MAX_PERMISSION_FIELD_LENGTH,
@@ -239,5 +241,33 @@ describe('parseBidiInputRequest', () => {
     ],
   ])('rejects %s', (_label, value) => {
     expect(parseBidiInputRequest(value)).toBeUndefined();
+  });
+});
+
+describe('parseBidiEvaluateRequest', () => {
+  const marker = { name: '__claudeTabMarker_0123456789abcdef', value: 'f'.repeat(32) };
+  const valid = { type: 'bidi_evaluate_request', requestId: 'r1', marker, url: 'https://a.example/', code: 'document.title' };
+
+  it('accepts a well-formed request and drops unknown fields', () => {
+    expect(parseBidiEvaluateRequest({ ...valid, extra: 1 })).toEqual(valid);
+    expect(parseExtensionMessage(valid)).toEqual(valid);
+  });
+
+  it('accepts the size limits exactly', () => {
+    expect(parseBidiEvaluateRequest({ ...valid, code: 'x'.repeat(MAX_BIDI_EVALUATE_CODE_LENGTH) })).toBeDefined();
+    expect(parseBidiEvaluateRequest({ ...valid, url: 'x'.repeat(MAX_BIDI_INPUT_URL_LENGTH) })).toBeDefined();
+  });
+
+  it.each([
+    ['a missing request id', { ...valid, requestId: undefined }],
+    ['a non-string url', { ...valid, url: 1 }],
+    ['a too long url', { ...valid, url: 'x'.repeat(MAX_BIDI_INPUT_URL_LENGTH + 1) }],
+    ['a missing marker', { ...valid, marker: undefined }],
+    ['a marker name that is not an identifier', { ...valid, marker: { ...marker, name: 'a"];alert(1);//' } }],
+    ['non-string code', { ...valid, code: 1 }],
+    ['empty code', { ...valid, code: '' }],
+    ['too long code', { ...valid, code: 'x'.repeat(MAX_BIDI_EVALUATE_CODE_LENGTH + 1) }],
+  ])('rejects %s', (_label, value) => {
+    expect(parseBidiEvaluateRequest(value)).toBeUndefined();
   });
 });

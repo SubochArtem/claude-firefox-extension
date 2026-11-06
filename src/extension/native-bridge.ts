@@ -1,6 +1,7 @@
 import { type ClientApprovals, createClientApprovals } from './permissions/client-prompt';
 import { type ExtensionToHostMessage, NATIVE_HOST_NAME, parseHostMessage } from './protocol';
 import { executeTool } from './tools';
+import { type BidiEvaluateChannel, createBidiEvaluateChannel } from './tools/bidi-evaluate';
 import { type BidiInputChannel, createBidiInputChannel } from './tools/bidi-input';
 
 const PONG_TIMEOUT_MS = 5_000;
@@ -19,6 +20,8 @@ let port: browser.runtime.Port | undefined;
 let clientApprovals: ClientApprovals | undefined;
 // WebDriver BiDi input requests run by the native host over the current port; failed when the port goes.
 let bidiInput: BidiInputChannel | undefined;
+// WebDriver BiDi script evaluations run by the native host over the current port; failed when the port goes.
+let bidiEvaluate: BidiEvaluateChannel | undefined;
 let pongTimer: ReturnType<typeof setTimeout> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let stableTimer: ReturnType<typeof setTimeout> | undefined;
@@ -31,6 +34,7 @@ export function connect(): void {
   port = current;
   clientApprovals = createClientApprovals((message) => send(current, message));
   bidiInput = createBidiInputChannel((message) => send(current, message));
+  bidiEvaluate = createBidiEvaluateChannel((message) => send(current, message));
   current.onMessage.addListener((message) => handleMessage(current, message));
   current.onDisconnect.addListener(() => {
     // Firefox reports why a port closed on port.error, not on runtime.lastError as Chrome does.
@@ -76,6 +80,10 @@ function handleMessage(source: browser.runtime.Port, message: unknown): void {
     bidiInput?.handleResponse(parsed);
     return;
   }
+  if (parsed.type === 'bidi_evaluate_response') {
+    bidiEvaluate?.handleResponse(parsed);
+    return;
+  }
   void executeTool(parsed, clientApprovals, bidiInput).then((response) => {
     if (source === port) send(source, response);
   });
@@ -88,6 +96,8 @@ function handleLoss(lost: browser.runtime.Port): void {
   clientApprovals = undefined;
   bidiInput?.close();
   bidiInput = undefined;
+  bidiEvaluate?.close();
+  bidiEvaluate = undefined;
   clearTimeout(pongTimer);
   pongTimer = undefined;
   clearTimeout(stableTimer);

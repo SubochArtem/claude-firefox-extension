@@ -66,6 +66,28 @@ describe('parseHostMessage', () => {
     expect(parseHostMessage({ type: 'bidi_input_response', ok: true })).toBeUndefined();
   });
 
+  it('accepts a bidi evaluate response and settles a malformed one as an error', () => {
+    const base = { type: 'bidi_evaluate_response', requestId: 'r' };
+    expect(parseHostMessage({ ...base, ok: true, value: '42', x: 1 })).toEqual({ ...base, ok: true, value: '42' });
+    expect(parseHostMessage({ ...base, ok: true, exception: 'Error: boom' })).toEqual({ ...base, ok: true, exception: 'Error: boom' });
+    expect(parseHostMessage({ ...base, ok: false, error: 'no tab' })).toEqual({ ...base, ok: false, error: 'no tab' });
+    expect(parseHostMessage({ ...base, ok: false, error: 'no port', unavailable: true })).toEqual({
+      ...base,
+      ok: false,
+      error: 'no port',
+      unavailable: true,
+    });
+    expect(parseHostMessage({ ...base, ok: false, error: 'no port', unavailable: 'yes' })).toEqual({ ...base, ok: false, error: 'no port' });
+    for (const malformed of [{ ok: true }, { ok: true, value: 1 }, { ok: false }, { ok: 'yes', value: '1' }, { ok: false, error: 1 }]) {
+      expect(parseHostMessage({ ...base, ...malformed })).toEqual({
+        ...base,
+        ok: false,
+        error: 'The native host sent a malformed evaluate response',
+      });
+    }
+    expect(parseHostMessage({ type: 'bidi_evaluate_response', ok: true, value: '1' })).toBeUndefined();
+  });
+
   it.each([
     ['undefined', undefined],
     ['a permission response without a requestId', { type: 'permission_response', answer: 'deny' }],

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BIDI_PORT_ENV, BidiError, bidiPort, BidiUnavailableError, connectBidi, DEFAULT_BIDI_PORT } from '../bidi-client';
-import { BIDI_ABORT_CLEANUP_TIMEOUT_MS, createSerialQueue, runBidiInput, type BidiInputTimeouts } from '../bidi-input';
+import { runBidiInput, type BidiInputTimeouts } from '../bidi-input';
+import { BIDI_ABORT_CLEANUP_TIMEOUT_MS, createSerialQueue } from '../bidi-session';
 import { closedPort, HANG, startFakeBidi, startPlainHttp, type FakeBidi } from './fake-bidi';
 import { waitFor } from './helpers';
 
@@ -376,7 +377,7 @@ describe('createSerialQueue', () => {
     );
     const second = queue.run(() => Promise.resolve(2));
     await expect(queue.run(() => Promise.resolve(3))).rejects.toThrow(
-      /^Too many input requests are waiting for WebDriver BiDi/,
+      /^Too many requests are waiting for WebDriver BiDi/,
     );
     await waitFor(() => expect(release).toBeDefined());
     release?.();
@@ -394,7 +395,7 @@ describe('createSerialQueue', () => {
       return Promise.resolve();
     });
     await first;
-    await expect(second).rejects.toThrow(/^The input request waited too long for WebDriver BiDi/);
+    await expect(second).rejects.toThrow(/^The request waited too long for WebDriver BiDi/);
     expect(ran).toBe(false);
   });
 });

@@ -3,22 +3,36 @@ import type { InputSource } from './input-actions';
 import { errorMessage } from './tab-access';
 import { ToolError } from './tool-error';
 
-export type BidiInputResult = { ok: true } | { ok: false; error: string; unavailable?: true };
+export type HostFailure = { ok: false; error: string; unavailable?: true };
+
+export type BidiInputResult = { ok: true } | HostFailure;
 
 // The native host reported WebDriver BiDi itself as unusable; the message is the host's cause.
 export class BidiUnavailableError extends ToolError {}
 
-// Input requests to the native host over one native port. Never rejects: a timeout, a closed port or a
-// failed send settles the request with an error.
-export interface BidiInputChannel {
-  request(input: Pick<BidiInputRequest, 'marker' | 'url' | 'actions'>): Promise<BidiInputResult>;
-  handleResponse(response: BidiInputResponse): void;
+// Requests to the native host over one native port, matched to responses by requestId. Never rejects:
+// a timeout, a closed port or a failed send settles the request with an error.
+export interface HostRequestChannel<Input, Response, Result> {
+  request(input: Input): Promise<Result | HostFailure>;
+  handleResponse(response: Response): void;
   close(): void;
 }
 
-export function createBidiInputChannel(send: (message: BidiInputRequest) => void): BidiInputChannel {
-  const pending = new Map<string, (result: BidiInputResult) => void>();
+export interface HostRequestOptions<Input, Request, Response, Result> {
+  // What the request carries, for the error messages: "input", "script".
+  noun: string;
+  timeoutMs: number;
+  toRequest(requestId: string, input: Input): Request;
+  toResult(response: Response): Result | HostFailure;
+}
+
+export function createHostRequestChannel<Input, Request, Response extends { requestId: string }, Result>(
+  send: (message: Request) => void,
+  options: HostRequestOptions<Input, Request, Response, Result>,
+): HostRequestChannel<Input, Response, Result> {
+  const pending = new Map<string, (result: Result | HostFailure) => void>();
   let closed = false;
+  const { noun, timeoutMs } = options;
 
   return {
     request: (input) =>
@@ -28,35 +42,47 @@ export function createBidiInputChannel(send: (message: BidiInputRequest) => void
           return;
         }
         const requestId = crypto.randomUUID();
-        const finish = (result: BidiInputResult) => {
+        const finish = (result: Result | HostFailure) => {
           clearTimeout(timer);
           pending.delete(requestId);
           resolve(result);
         };
         const timer = setTimeout(
-          () => finish({ ok: false, error: `The native host did not finish the input within ${BIDI_INPUT_TIMEOUT_MS / 1000} s` }),
-          BIDI_INPUT_TIMEOUT_MS,
+          () => finish({ ok: false, error: `The native host did not finish the ${noun} within ${timeoutMs / 1000} s` }),
+          timeoutMs,
         );
         pending.set(requestId, finish);
         try {
-          send({ type: 'bidi_input_request', requestId, ...input });
+          send(options.toRequest(requestId, input));
         } catch (error) {
-          finish({ ok: false, error: `Could not send the input to the native host: ${errorMessage(error)}` });
+          finish({ ok: false, error: `Could not send the ${noun} to the native host: ${errorMessage(error)}` });
         }
       }),
     handleResponse(response) {
-      const finish = pending.get(response.requestId);
-      if (!finish) return;
-      if (response.ok) finish({ ok: true });
-      else finish({ ok: false, error: response.error, ...(response.unavailable ? { unavailable: true as const } : {}) });
+      pending.get(response.requestId)?.(options.toResult(response));
     },
     close() {
       closed = true;
       for (const finish of [...pending.values()]) {
-        finish({ ok: false, error: 'The native host disconnected before the input finished' });
+        finish({ ok: false, error: `The native host disconnected before the ${noun} finished` });
       }
     },
   };
+}
+
+export function hostFailure(response: { error: string; unavailable?: true }): HostFailure {
+  return { ok: false, error: response.error, ...(response.unavailable ? { unavailable: true as const } : {}) };
+}
+
+export type BidiInputChannel = HostRequestChannel<Pick<BidiInputRequest, 'marker' | 'url' | 'actions'>, BidiInputResponse, BidiInputResult>;
+
+export function createBidiInputChannel(send: (message: BidiInputRequest) => void): BidiInputChannel {
+  return createHostRequestChannel(send, {
+    noun: 'input',
+    timeoutMs: BIDI_INPUT_TIMEOUT_MS,
+    toRequest: (requestId, input) => ({ type: 'bidi_input_request' as const, requestId, ...input }),
+    toResult: (response) => (response.ok ? { ok: true } : hostFailure(response)),
+  });
 }
 
 function randomHex(bytes: number): string {
@@ -82,24 +108,31 @@ async function runInMainWorld<Args extends unknown[]>(tabId: number, func: (...a
 
 // WebDriver BiDi knows nothing of tabs.Tab.id, so the tab is marked with a random property in its
 // page's main world, the realm BiDi script.evaluate sees, and the native host looks for the context
-// carrying it. The tab is not activated.
+// carrying it. The tab is not activated. `failure` prefixes the error when the marker cannot be set.
+export async function withTabMarker<T>(tabId: number, failure: string, run: (marker: TabMarker) => Promise<T>): Promise<T> {
+  const marker = newTabMarker();
+  try {
+    try {
+      await runInMainWorld(tabId, setMarker, [marker.name, marker.value]);
+    } catch (error) {
+      throw new ToolError(`${failure}: ${errorMessage(error)}`);
+    }
+    return await run(marker);
+  } finally {
+    await runInMainWorld(tabId, clearMarker, [marker.name]).catch(() => undefined);
+  }
+}
+
 export async function performInput(
   channel: BidiInputChannel | undefined,
   tabId: number,
   url: string,
   actions: InputSource[],
 ): Promise<void> {
-  if (!channel) throw new ToolError(`Failed to send input to tab ${tabId}: the native host is not connected`);
-  const marker = newTabMarker();
-  try {
-    try {
-      await runInMainWorld(tabId, setMarker, [marker.name, marker.value]);
-    } catch (error) {
-      throw new ToolError(`Failed to send input to tab ${tabId}: ${errorMessage(error)}`);
-    }
+  const failure = `Failed to send input to tab ${tabId}`;
+  if (!channel) throw new ToolError(`${failure}: the native host is not connected`);
+  await withTabMarker(tabId, failure, async (marker) => {
     const result = await channel.request({ marker, url, actions });
     if (!result.ok) throw result.unavailable ? new BidiUnavailableError(result.error) : new ToolError(result.error);
-  } finally {
-    await runInMainWorld(tabId, clearMarker, [marker.name]).catch(() => undefined);
-  }
+  });
 }

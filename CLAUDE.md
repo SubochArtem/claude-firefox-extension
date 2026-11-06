@@ -144,7 +144,8 @@ src/                   npm package root; every command is run from here
       computer-keys.ts  type and key actions of the computer tool: zoom shortcuts refused, reload shortcuts through tabs.reload, other keys and typed text as BiDi input behind the type permission
       input-keys.ts    key text parsing: WebDriver key values, chords and modifier aliases, typed text to key values, page zoom and reload shortcut detection
       input-actions.ts  WebDriver BiDi input.performActions sources for key, type, click, hover, drag and scroll, modifiers held tick-aligned with the pointer
-      bidi-input.ts    performInput: marks the tab in the page's main world, asks the native host to run BiDi input, removes the marker, throws BidiUnavailableError when the host reports BiDi unavailable; request channel over the native port
+      bidi-input.ts    performInput: marks the tab in the page's main world (withTabMarker), asks the native host to run BiDi input, removes the marker, throws BidiUnavailableError when the host reports BiDi unavailable; generic request channel over the native port and the input channel
+      bidi-evaluate.ts  evaluateInTab and the evaluate channel: marks the tab, asks the native host to run script.evaluate, returns the formatted value or exception
       synthetic-input.ts  synthetic input fallback: runs the page entry after the same-site check, DOM key names and modifier flags, the fallback warning
       read-page-input.ts  pure argument validation for read_page
       read-page.ts     read_page tool: options, result check and output on top of page-script.ts
@@ -169,7 +170,10 @@ src/                   npm package root; every command is run from here
     handshake.ts       bridge handshake: nonces, HMAC proofs, message parsers, limits, client side on a socket
     host-probe.ts      authenticated liveness probe of the host named in bridge.json (Windows second-host check)
     bidi-client.ts     WebDriver BiDi WebSocket client: port from CLAUDE_FIREFOX_BIDI_PORT, commands with timeouts, connection error messages
-    bidi-input.ts      one BiDi session per input request: finds the marked tab's context, performActions, release and session.end in finally; serial queue
+    bidi-session.ts    one BiDi session per request: finds the marked tab's context, runs the request, optional release and session.end in finally; serial queue shared by input and evaluate
+    bidi-input.ts      input requests: input.performActions in the marked context, input.releaseActions after it
+    bidi-evaluate.ts   evaluate requests: script.evaluate in the marked context's main realm, async re-run for top-level await/return, 30 s script deadline, exception text with stack
+    remote-value-format.ts  BiDi RemoteValue to readable text: containers, nodes, references, depth cut-offs, best-effort redaction, 50 KB cap
     listen.ts          listen on an endpoint, retrying fresh endpoints on EADDRINUSE
     json-lines.ts      newline-delimited JSON framing on the bridge socket
     native-messaging.ts  Firefox native messaging stdio framing
