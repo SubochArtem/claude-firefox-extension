@@ -1,7 +1,8 @@
+import { ANTHROPIC_API_ORIGIN, CHAT_MODELS, CHAT_SETTINGS_STORAGE_KEY, type ChatModel, loadChatSettings, saveChatSettings, validApiKey } from '../chat-settings';
 import { loadPermissions, PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 import { type AgentTabs, loadSettings, saveSettings, SETTINGS_STORAGE_KEY } from '../settings';
 import { REVOKE_PERMISSION_MESSAGE } from './options-messages';
-import { permissionRows } from './options-view';
+import { apiKeyStatus, permissionRows } from './options-view';
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -84,10 +85,100 @@ for (const input of agentTabInputs) {
   });
 }
 
+const apiKeyInput = element<HTMLInputElement>('api-key');
+const modelSelect = element<HTMLSelectElement>('chat-model');
+const grantButton = element<HTMLButtonElement>('api-access-grant');
+const apiAccess = { origins: [ANTHROPIC_API_ORIGIN] };
+
+modelSelect.replaceChildren(
+  ...CHAT_MODELS.map((model) => {
+    const option = document.createElement('option');
+    option.value = model.id;
+    option.textContent = model.label;
+    return option;
+  }),
+);
+
+async function renderChatSettings(): Promise<void> {
+  const { apiKey, model } = await loadChatSettings();
+  element('api-key-status').textContent = apiKeyStatus(apiKey);
+  modelSelect.value = model;
+}
+
+async function renderApiAccess(): Promise<void> {
+  const granted = await browser.permissions.contains(apiAccess);
+  element('api-access-status').textContent = granted
+    ? 'Access to api.anthropic.com is granted.'
+    : 'Access to api.anthropic.com is not granted. The sidebar chat needs it.';
+  grantButton.hidden = granted;
+}
+
+let chatSettingsUpdate: Promise<void> = Promise.resolve();
+
+// Each update reads and writes the whole record, so updates run one at a time to keep each other's changes.
+function updateChatSettings(change: { apiKey?: string; model?: ChatModel }): Promise<void> {
+  const update = chatSettingsUpdate.then(async () => {
+    await saveChatSettings({ ...(await loadChatSettings()), ...change });
+    showStatus('');
+  });
+  chatSettingsUpdate = update.catch(() => undefined);
+  return update;
+}
+
+element('api-key-save').addEventListener('click', () => {
+  const apiKey = validApiKey(apiKeyInput.value);
+  if (apiKey === undefined) {
+    showStatus('The API key must contain only printable ASCII characters without spaces.');
+    return;
+  }
+  if (apiKey === '') {
+    showStatus('Enter an API key to save.');
+    return;
+  }
+  reportFailure(
+    updateChatSettings({ apiKey }).then(() => {
+      apiKeyInput.value = '';
+    }),
+    'save the API key',
+  );
+});
+
+element('api-key-clear').addEventListener('click', () => {
+  apiKeyInput.value = '';
+  reportFailure(updateChatSettings({ apiKey: '' }), 'clear the API key');
+});
+
+modelSelect.addEventListener('change', () => {
+  reportFailure(
+    updateChatSettings({ model: modelSelect.value as ChatModel }).catch((error: unknown) => {
+      reportFailure(renderChatSettings(), 'load the chat settings');
+      throw error;
+    }),
+    'save the model',
+  );
+});
+
+grantButton.addEventListener('click', () => {
+  // permissions.request needs the user gesture, so it is called before anything is awaited.
+  reportFailure(
+    browser.permissions.request(apiAccess).then((granted) => {
+      showStatus(granted ? '' : 'Access to api.anthropic.com was not granted.');
+      return renderApiAccess();
+    }),
+    'request access to api.anthropic.com',
+  );
+});
+
+browser.permissions.onAdded.addListener(() => reportFailure(renderApiAccess(), 'check access to api.anthropic.com'));
+browser.permissions.onRemoved.addListener(() => reportFailure(renderApiAccess(), 'check access to api.anthropic.com'));
+
 browser.storage.local.onChanged.addListener((changes) => {
   if (SETTINGS_STORAGE_KEY in changes) reportFailure(renderSettings(), 'load the setting');
+  if (CHAT_SETTINGS_STORAGE_KEY in changes) reportFailure(renderChatSettings(), 'load the chat settings');
   if (PERMISSION_STORAGE_KEY in changes) reportFailure(renderPermissions(), 'load the site permissions');
 });
 
 reportFailure(renderSettings(), 'load the setting');
+reportFailure(renderChatSettings(), 'load the chat settings');
+reportFailure(renderApiAccess(), 'check access to api.anthropic.com');
 reportFailure(renderPermissions(), 'load the site permissions');

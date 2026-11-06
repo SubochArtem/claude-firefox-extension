@@ -106,14 +106,15 @@ src/                   npm package root; every command is run from here
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks, happy-dom tests for page/
     settings.ts        extension settings in storage.local (agent tabs: Claude container or normal profile), validated loader
+    chat-settings.ts   sidebar chat settings in storage.local (API key, model from CHAT_MODELS), validated loader and saver, Anthropic API host permission pattern
     chat/              sidebar chat model access (no browser.* calls)
       provider.ts      ChatProvider interface: one streamed turn; Anthropic-shaped message, content block, usage and result types
       anthropic-provider.ts  Anthropic Messages API over fetch: streamed request with cache_control on the last tool and system block, SSE event assembly into text and tool_use blocks, HTTP and stream errors, idle watchdog, abort
       sse.ts           server-sent events parser over decoded text, chunks split anywhere
       chat-errors.ts   ChatApiError (status, API error type, retryable) and ChatAbortError
-    options/           options page (about:addons): agent tabs switch, stored site permissions with Revoke
+    options/           options page (about:addons): agent tabs switch, sidebar chat API key, model and api.anthropic.com access, stored site permissions with Revoke
       options.html, options.ts  the page: renders with textContent, live refresh on storage changes
-      options-view.ts  pure rows for the permission list
+      options-view.ts  pure rows for the permission list, saved API key status (last 4 characters only)
       options-messages.ts  background handler for revoke requests from the options page
     page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)

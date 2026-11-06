@@ -34,4 +34,8 @@ describe('manifest', () => {
   it('requests access to all websites, which tabs.captureTab requires', () => {
     expect(manifest.host_permissions).toEqual(['<all_urls>']);
   });
+
+  it('declares the Anthropic API as an optional host permission for the sidebar chat', () => {
+    expect(manifest.optional_host_permissions).toEqual(['https://api.anthropic.com/*']);
+  });
 });
