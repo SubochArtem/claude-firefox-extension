@@ -170,6 +170,35 @@ describe('runAgentLoop', () => {
     });
   });
 
+  it('keeps the history valid and finishes when UI callbacks throw', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const { provider } = scriptedProvider([
+      async (request) => {
+        request.onText?.('Hi');
+        return turn('tool_use', toolUse('a'), toolUse('b'));
+      },
+      turn('end_turn', text('ok')),
+    ]);
+    const fail = () => {
+      throw new Error('ui broke');
+    };
+    const { promise, history, executeTool } = run(provider, {
+      events: { onText: fail, onToolCall: fail, onToolResult: fail, onDone: fail },
+    });
+    expect(await promise).toEqual({ kind: 'end_turn', turns: 2 });
+    expect(vi.mocked(executeTool).mock.calls.map(([call]) => call.id)).toEqual(['a', 'b']);
+    expect(history[2]).toEqual({
+      role: 'user',
+      content: [
+        { type: 'tool_result', tool_use_id: 'a', content: [text('ran a')] },
+        { type: 'tool_result', tool_use_id: 'b', content: [text('ran b')] },
+      ],
+    });
+    expect(history).toHaveLength(4);
+    expect(consoleError).toHaveBeenCalledTimes(6);
+    consoleError.mockRestore();
+  });
+
   it('reports max_tokens and closes a tool call left without a result', async () => {
     const { provider } = scriptedProvider([turn('max_tokens', text('partial'), toolUse('a'))]);
     const { promise, history, executeTool, events } = run(provider);

@@ -142,12 +142,38 @@ function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
 
+// A throwing UI callback must not break the run: a tool_use left without its tool_result would make
+// every later request of the conversation invalid.
+function guarded<A extends unknown[]>(callback: ((...args: A) => void) | undefined): (...args: A) => void {
+  return (...args: A) => {
+    try {
+      callback?.(...args);
+    } catch (error) {
+      console.error('Chat UI callback failed', error);
+    }
+  };
+}
+
+function guardEvents(events: AgentLoopEvents = {}): Required<AgentLoopEvents> {
+  return {
+    onText: guarded(events.onText),
+    onToolCall: guarded(events.onToolCall),
+    onToolResult: guarded(events.onToolResult),
+    onRetry: guarded(events.onRetry),
+    onDone: guarded(events.onDone),
+    onError: guarded(events.onError),
+  };
+}
+
 class AgentRun {
-  private readonly events: AgentLoopEvents;
+  private readonly events: Required<AgentLoopEvents>;
   private readonly sleep: Sleep;
 
-  constructor(private readonly options: AgentLoopOptions) {
-    this.events = options.events ?? {};
+  constructor(
+    private readonly options: AgentLoopOptions,
+    events: Required<AgentLoopEvents>,
+  ) {
+    this.events = events;
     this.sleep = options.sleep ?? abortableSleep;
   }
 
@@ -163,13 +189,13 @@ class AgentRun {
           tools: this.options.tools ?? ANTHROPIC_TOOLS,
           maxTokens: this.options.maxTokens ?? DEFAULT_MAX_TOKENS,
           signal,
-          ...(this.events.onText ? { onText: this.events.onText } : {}),
+          ...(this.options.events?.onText ? { onText: this.events.onText } : {}),
         });
       } catch (error) {
         if (signal.aborted) throw new ChatAbortError();
         if (!(error instanceof ChatApiError) || !error.retryable || attempt >= MAX_RETRIES) throw error;
         const delayMs = RETRY_BASE_DELAY_MS * 2 ** attempt;
-        this.events.onRetry?.({ attempt: attempt + 1, delayMs, error });
+        this.events.onRetry({ attempt: attempt + 1, delayMs, error });
         await this.sleep(delayMs, signal);
       }
     }
@@ -194,11 +220,11 @@ class AgentRun {
     const results: ToolResultBlock[] = [];
     for (const call of calls) {
       if (signal.aborted) break;
-      this.events.onToolCall?.(call);
+      this.events.onToolCall(call);
       const result = await this.runTool(call);
       if (result === undefined) break;
       results.push(result);
-      this.events.onToolResult?.(result);
+      this.events.onToolResult(result);
     }
     this.closeCalls(calls.slice(results.length), CANCELLED_TEXT, results);
     history.push({ role: 'user', content: results });
@@ -208,7 +234,7 @@ class AgentRun {
     for (const call of calls) {
       const result = errorResult(call, text);
       results.push(result);
-      this.events.onToolResult?.(result);
+      this.events.onToolResult(result);
     }
   }
 
@@ -245,8 +271,9 @@ class AgentRun {
 // Runs model turns and tool calls until the model ends its turn, the run is cancelled, fails or hits
 // the turn cap. Never rejects: the outcome is returned and reported through onDone or onError.
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopOutcome> {
-  const outcome = await new AgentRun(options).run();
-  if (outcome.kind === 'error') options.events?.onError?.(outcome.error);
-  else options.events?.onDone?.(outcome);
+  const events = guardEvents(options.events);
+  const outcome = await new AgentRun(options, events).run();
+  if (outcome.kind === 'error') events.onError(outcome.error);
+  else events.onDone(outcome);
   return outcome;
 }
