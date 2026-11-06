@@ -131,13 +131,14 @@ src/                   npm package root; every command is run from here
       prompt.html, prompt.ts  the prompt page: host, action, tool, allow/deny once/always, include subdomains
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
-      computer-input.ts  pure argument validation for the computer tool (screenshot, zoom, clicks, hover, drag, scroll, scroll_to, wait)
+      computer-input.ts  pure argument validation for the computer tool (screenshot, zoom, clicks, hover, drag, scroll, scroll_to, type, key, wait)
       screenshot-size.ts  screenshot frame and output sizes within the image token budget
       coordinate-frame.ts  per-tab last screenshot frame (shared screenshotFrames), maps frame coordinates to viewport CSS pixels
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
-      computer.ts      computer tool: screenshot and zoom (tabs.captureTab, JPEG resize and quality stepping, coordinate frames), wait, dispatch of pointer actions, screenshot after scroll
+      computer.ts      computer tool: screenshot and zoom (tabs.captureTab, JPEG resize and quality stepping, coordinate frames), wait, dispatch of pointer and keyboard actions, screenshot after scroll
       computer-pointer.ts  pointer actions of the computer tool: site gate, frame or ref targets, BiDi input, landed-site re-check after the input
+      computer-keys.ts  type and key actions of the computer tool: zoom shortcuts refused, reload shortcuts through tabs.reload, other keys and typed text as BiDi input behind the type permission
       input-keys.ts    key text parsing: WebDriver key values, chords and modifier aliases, typed text to key values, page zoom and reload shortcut detection
       input-actions.ts  WebDriver BiDi input.performActions sources for key, type, click, hover, drag and scroll, modifiers held tick-aligned with the pointer
       bidi-input.ts    performInput: marks the tab in the page's main world, asks the native host to run BiDi input, removes the marker; request channel over the native port

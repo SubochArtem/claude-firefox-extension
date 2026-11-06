@@ -224,10 +224,12 @@ export const computerInputSchema = z.strictObject({
       'left_click_drag',
       'scroll',
       'scroll_to',
+      'type',
+      'key',
       'wait',
     ])
     .describe(
-      'Action to perform; "screenshot" captures the visible part of the tab, "zoom" captures a region of the last screenshot at higher resolution, the click actions and "hover" move the mouse to a coordinate or an element, "left_click_drag" drags from start_coordinate to coordinate, "scroll" turns the mouse wheel at a coordinate and returns a new screenshot, "scroll_to" scrolls an element into view, "wait" pauses',
+      'Action to perform; "screenshot" captures the visible part of the tab, "zoom" captures a region of the last screenshot at higher resolution, the click actions and "hover" move the mouse to a coordinate or an element, "left_click_drag" drags from start_coordinate to coordinate, "scroll" turns the mouse wheel at a coordinate and returns a new screenshot, "scroll_to" scrolls an element into view, "type" types text into the focused element, "key" presses keys or shortcuts, "wait" pauses',
     ),
   tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
   region: z
@@ -281,6 +283,19 @@ export const computerInputSchema = z.strictObject({
     .max(10)
     .optional()
     .describe('wait only, required there: seconds to wait (more than 0, at most 10)'),
+  text: z
+    .string()
+    .optional()
+    .describe(
+      'type and key only, required there. type: the text to type into the focused element (newlines press Enter). key: space-separated keys or chords, e.g. "Enter", "ctrl+a Delete", "shift+Tab", "cmd+c"; names include Enter, Tab, Escape, Backspace, Delete, arrows (Up, Down, Left, Right), Home, End, PageUp, PageDown, F1 to F12 and single characters',
+    ),
+  repeat: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .optional()
+    .describe('key only: how many times to press the whole key sequence (1 to 100, default 1)'),
 });
 
 export const readPageInputSchema = z.strictObject({
@@ -448,7 +463,7 @@ export async function runMcpServer(): Promise<void> {
     'computer',
     {
       description:
-        'Interact with a browser tab. "screenshot" captures the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. "zoom" captures the region [x0, y0, x1, y1] of the last screenshot frame at up to device resolution to read small details; it does not change the frame, so coordinates keep referring to the last screenshot. "left_click", "right_click", "double_click" and "triple_click" click at coordinate or on an element ref (optionally holding modifiers), "hover" moves the mouse there, "left_click_drag" drags with the left button from start_coordinate to coordinate. Input is sent as real mouse events through WebDriver BiDi, so Firefox must be started with --remote-debugging-port; background tabs receive it without being activated. "scroll" turns the mouse wheel at coordinate by scroll_amount ticks in scroll_direction and returns a new screenshot, which becomes the new coordinate frame. "scroll_to" scrolls the element ref into view. "wait" pauses for duration seconds. Keyboard actions will be added.',
+        'Interact with a browser tab. "screenshot" captures the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. "zoom" captures the region [x0, y0, x1, y1] of the last screenshot frame at up to device resolution to read small details; it does not change the frame, so coordinates keep referring to the last screenshot. "left_click", "right_click", "double_click" and "triple_click" click at coordinate or on an element ref (optionally holding modifiers), "hover" moves the mouse there, "left_click_drag" drags with the left button from start_coordinate to coordinate. Input is sent as real mouse and keyboard events through WebDriver BiDi, so Firefox must be started with --remote-debugging-port; background tabs receive it without being activated. "scroll" turns the mouse wheel at coordinate by scroll_amount ticks in scroll_direction and returns a new screenshot, which becomes the new coordinate frame. "scroll_to" scrolls the element ref into view. "type" types text and "key" presses space-separated keys or chords (repeat times) to the tab\'s focused element (click the field first). Reload shortcuts such as F5 or ctrl+r reload the tab; page zoom shortcuts are refused, use "zoom" instead. "wait" pauses for duration seconds.',
       inputSchema: computerInputSchema,
     },
     forward('computer'),

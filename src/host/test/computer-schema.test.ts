@@ -66,6 +66,32 @@ describe('computerInputSchema', () => {
     expect(computerInputSchema.safeParse(args).success).toBe(false);
   });
 
+  it.each([
+    { action: 'type', text: 'hello' },
+    { action: 'type', text: 'a', tabId: 2 },
+    { action: 'key', text: 'ctrl+a Enter' },
+    { action: 'key', text: 'Down', repeat: 1 },
+    { action: 'key', text: 'Down', repeat: 100 },
+  ])('accepts keyboard actions %j', (args) => {
+    expect(computerInputSchema.safeParse(args).success).toBe(true);
+  });
+
+  it.each([
+    { action: 'type', text: 5 },
+    { action: 'key', text: ['Enter'] },
+    { action: 'key', text: 'Enter', repeat: 0 },
+    { action: 'key', text: 'Enter', repeat: 101 },
+    { action: 'key', text: 'Enter', repeat: 1.5 },
+  ])('rejects keyboard arguments %j', (args) => {
+    expect(computerInputSchema.safeParse(args).success).toBe(false);
+  });
+
+  it('describes text and repeat for the keyboard actions', () => {
+    expect(computerInputSchema.shape.text.description).toMatch(/type/);
+    expect(computerInputSchema.shape.text.description).toMatch(/key/);
+    expect(computerInputSchema.shape.repeat.description).toMatch(/key only/);
+  });
+
   it('describes coordinates in the last screenshot frame', () => {
     expect(computerInputSchema.shape.coordinate.description).toContain('last screenshot frame');
     expect(computerInputSchema.shape.start_coordinate.description).toContain('last screenshot frame');

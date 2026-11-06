@@ -25,6 +25,9 @@ function computerAction(action: unknown): PermissionAction | undefined {
     case 'scroll':
     case 'scroll_to':
       return 'read_page_content';
+    case 'type':
+    case 'key':
+      return 'type';
     default:
       return undefined;
   }

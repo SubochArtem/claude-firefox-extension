@@ -103,6 +103,7 @@ export function mockBrowser() {
     ),
     goBack: vi.fn<(tabId: number) => Promise<void>>(async () => {}),
     goForward: vi.fn<(tabId: number) => Promise<void>>(async () => {}),
+    reload: vi.fn<(tabId: number, properties?: browser.tabs._ReloadReloadProperties) => Promise<void>>(async () => {}),
     create: vi.fn<(properties: browser.tabs._CreateCreateProperties) => Promise<Partial<browser.tabs.Tab>>>(
       async () => ({ id: 1 }),
     ),

@@ -180,6 +180,8 @@ describe('MCP server process', () => {
             'left_click_drag',
             'scroll',
             'scroll_to',
+            'type',
+            'key',
             'wait',
           ],
         },
@@ -193,12 +195,16 @@ describe('MCP server process', () => {
         scroll_direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
         scroll_amount: { type: 'integer', minimum: 1, maximum: 10 },
         duration: { type: 'number', exclusiveMinimum: 0, maximum: 10 },
+        text: { type: 'string' },
+        repeat: { type: 'integer', minimum: 1, maximum: 100 },
       },
       required: ['action'],
     });
     expect(computer?.description).toMatch(/screenshot/);
     expect(computer?.description).toMatch(/zoom/);
     expect(computer?.description).toMatch(/--remote-debugging-port/);
+    expect(computer?.description).toMatch(/"type"/);
+    expect(computer?.description).toMatch(/"key"/);
   });
 
   it('lists read_page with optional tabId, filter, depth, ref_id and max_chars', async () => {

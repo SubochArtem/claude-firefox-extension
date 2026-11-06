@@ -1,4 +1,4 @@
-import { DEFAULT_SCROLL_AMOUNT, MAX_SCROLL_AMOUNT, type ScrollDirection } from './input-actions';
+import { DEFAULT_SCROLL_AMOUNT, MAX_KEY_REPEAT, MAX_SCROLL_AMOUNT, type ScrollDirection } from './input-actions';
 import { parseModifiers } from './input-keys';
 import { describe, isRecord, type ParseResult, parseTabId } from './navigation-input';
 
@@ -13,6 +13,8 @@ export const COMPUTER_ACTIONS = [
   'left_click_drag',
   'scroll',
   'scroll_to',
+  'type',
+  'key',
   'wait',
 ] as const;
 export type ComputerAction = (typeof COMPUTER_ACTIONS)[number];
@@ -79,6 +81,19 @@ export interface ScrollToArgs {
   tabId?: number;
 }
 
+export interface TypeArgs {
+  action: 'type';
+  text: string;
+  tabId?: number;
+}
+
+export interface KeyArgs {
+  action: 'key';
+  text: string;
+  repeat: number;
+  tabId?: number;
+}
+
 export interface WaitArgs {
   action: 'wait';
   duration: number;
@@ -86,7 +101,9 @@ export interface WaitArgs {
 
 export type PointerArgs = ClickArgs | HoverArgs | DragArgs | ScrollArgs | ScrollToArgs;
 
-export type ComputerArgs = ScreenshotArgs | ZoomArgs | PointerArgs | WaitArgs;
+export type KeyboardArgs = TypeArgs | KeyArgs;
+
+export type ComputerArgs = ScreenshotArgs | ZoomArgs | PointerArgs | KeyboardArgs | WaitArgs;
 
 const MAX_ECHOED_KEY_LENGTH = 100;
 
@@ -104,6 +121,8 @@ const ACTION_PARAMETERS: Record<ComputerAction, readonly string[]> = {
   left_click_drag: ['action', 'tabId', 'start_coordinate', 'coordinate'],
   scroll: ['action', 'tabId', 'coordinate', 'scroll_direction', 'scroll_amount'],
   scroll_to: ['action', 'tabId', 'ref'],
+  type: ['action', 'tabId', 'text'],
+  key: ['action', 'tabId', 'text', 'repeat'],
   wait: ['action', 'tabId', 'duration'],
 };
 
@@ -286,6 +305,27 @@ function parseAmount(value: unknown): ParseResult<number> {
   return { ok: true, value };
 }
 
+function parseText(value: unknown, action: KeyboardArgs['action']): ParseResult<string> {
+  if (value === undefined) {
+    const meaning = action === 'type' ? 'the text to type' : 'space-separated keys or chords like "ctrl+a Enter"';
+    return { ok: false, error: `Missing required parameter text (${meaning}) for action "${action}"` };
+  }
+  if (typeof value !== 'string') return { ok: false, error: `text must be a string, received ${describe(value)}` };
+  if (action === 'type' && value === '') return { ok: false, error: 'text must not be empty for action "type"' };
+  if (action === 'key' && value.trim() === '') {
+    return { ok: false, error: 'text must name at least one key for action "key", e.g. "Enter" or "ctrl+a"' };
+  }
+  return { ok: true, value };
+}
+
+function parseRepeat(value: unknown): ParseResult<number> {
+  if (value === undefined) return { ok: true, value: 1 };
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > MAX_KEY_REPEAT) {
+    return { ok: false, error: `repeat must be an integer between 1 and ${MAX_KEY_REPEAT}, received ${describe(value)}` };
+  }
+  return { ok: true, value };
+}
+
 function parseDuration(value: unknown): ParseResult<number> {
   if (value === undefined) {
     return { ok: false, error: `Missing required parameter duration (seconds, up to ${MAX_WAIT_SECONDS}) for action "wait"` };
@@ -346,6 +386,20 @@ function parseScrollToArgs(args: Record<string, unknown>): ParseResult<ScrollToA
   return withTabId<ScrollToArgs>(args, { action: 'scroll_to', ref: ref.value });
 }
 
+function parseTypeArgs(args: Record<string, unknown>): ParseResult<TypeArgs> {
+  const text = parseText(args.text, 'type');
+  if (!text.ok) return text;
+  return withTabId<TypeArgs>(args, { action: 'type', text: text.value });
+}
+
+function parseKeyArgs(args: Record<string, unknown>): ParseResult<KeyArgs> {
+  const text = parseText(args.text, 'key');
+  if (!text.ok) return text;
+  const repeat = parseRepeat(args.repeat);
+  if (!repeat.ok) return repeat;
+  return withTabId<KeyArgs>(args, { action: 'key', text: text.value, repeat: repeat.value });
+}
+
 // tabId is accepted for symmetry with the other actions; waiting touches no tab.
 function parseWaitArgs(args: Record<string, unknown>): ParseResult<WaitArgs> {
   const duration = parseDuration(args.duration);
@@ -366,6 +420,8 @@ const ACTION_PARSERS: Record<ComputerAction, (args: Record<string, unknown>) => 
   left_click_drag: parseDragArgs,
   scroll: parseScrollArgs,
   scroll_to: parseScrollToArgs,
+  type: parseTypeArgs,
+  key: parseKeyArgs,
   wait: parseWaitArgs,
 };
 

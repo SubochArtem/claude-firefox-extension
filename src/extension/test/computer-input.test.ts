@@ -14,6 +14,8 @@ describe('parseComputerArgs', () => {
       'left_click_drag',
       'scroll',
       'scroll_to',
+      'type',
+      'key',
       'wait',
     ]);
   });
@@ -347,5 +349,77 @@ describe('parseComputerArgs wait', () => {
     [Number.POSITIVE_INFINITY, 'duration must be a finite number of seconds, received Infinity'],
   ])('rejects duration %s', (duration, error) => {
     expect(parseComputerArgs({ action: 'wait', duration })).toEqual({ ok: false, error });
+  });
+});
+
+describe('parseComputerArgs type', () => {
+  it('parses text and tabId', () => {
+    expect(parseComputerArgs({ action: 'type', text: 'hello world', tabId: 2 })).toEqual({
+      ok: true,
+      value: { action: 'type', text: 'hello world', tabId: 2 },
+    });
+  });
+
+  it('keeps whitespace and line breaks in the text', () => {
+    expect(parseComputerArgs({ action: 'type', text: ' a\nb ' })).toEqual({ ok: true, value: { action: 'type', text: ' a\nb ' } });
+  });
+
+  it.each([
+    [undefined, 'Missing required parameter text (the text to type) for action "type"'],
+    ['', 'text must not be empty for action "type"'],
+    [5, 'text must be a string, received 5'],
+    [['a'], 'text must be a string, received array'],
+  ])('rejects text %j', (text, error) => {
+    expect(parseComputerArgs({ action: 'type', text })).toEqual({ ok: false, error });
+  });
+
+  it('takes no repeat or coordinate', () => {
+    expect(parseComputerArgs({ action: 'type', text: 'a', repeat: 2 })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^Unknown parameter "repeat" for action "type"; allowed: action, tabId, text$/),
+    });
+    expect(parseComputerArgs({ action: 'type', text: 'a', coordinate: [1, 2] })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^Unknown parameter "coordinate" for action "type"/),
+    });
+  });
+});
+
+describe('parseComputerArgs key', () => {
+  it('parses keys with the default repeat', () => {
+    expect(parseComputerArgs({ action: 'key', text: 'ctrl+a Enter' })).toEqual({
+      ok: true,
+      value: { action: 'key', text: 'ctrl+a Enter', repeat: 1 },
+    });
+  });
+
+  it('parses repeat and tabId', () => {
+    expect(parseComputerArgs({ action: 'key', text: 'Down', repeat: 100, tabId: 3 })).toEqual({
+      ok: true,
+      value: { action: 'key', text: 'Down', repeat: 100, tabId: 3 },
+    });
+  });
+
+  it.each([
+    [undefined, 'Missing required parameter text (space-separated keys or chords like "ctrl+a Enter") for action "key"'],
+    ['', 'text must name at least one key for action "key", e.g. "Enter" or "ctrl+a"'],
+    ['   ', 'text must name at least one key for action "key", e.g. "Enter" or "ctrl+a"'],
+    [true, 'text must be a string, received true'],
+  ])('rejects text %j', (text, error) => {
+    expect(parseComputerArgs({ action: 'key', text })).toEqual({ ok: false, error });
+  });
+
+  it.each([0, 101, 1.5, -1, '2', null])('rejects repeat %j', (repeat) => {
+    expect(parseComputerArgs({ action: 'key', text: 'a', repeat })).toEqual({
+      ok: false,
+      error: expect.stringMatching(/^repeat must be an integer between 1 and 100, received /),
+    });
+  });
+
+  it('takes no modifiers', () => {
+    expect(parseComputerArgs({ action: 'key', text: 'a', modifiers: 'ctrl' })).toMatchObject({
+      ok: false,
+      error: 'Unknown parameter "modifiers" for action "key"; allowed: action, tabId, text, repeat',
+    });
   });
 });

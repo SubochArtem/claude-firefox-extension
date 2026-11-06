@@ -3,7 +3,15 @@ import { siteForUrl } from '../permissions/site';
 import { requireSiteAccess } from '../permissions/site-access';
 import type { ContentBlock } from '../protocol';
 import type { BidiInputChannel } from './bidi-input';
-import { parseComputerArgs, type PointerArgs, type ScreenshotArgs, type WaitArgs, type ZoomArgs } from './computer-input';
+import {
+  type KeyboardArgs,
+  parseComputerArgs,
+  type PointerArgs,
+  type ScreenshotArgs,
+  type WaitArgs,
+  type ZoomArgs,
+} from './computer-input';
+import { keyboardAction } from './computer-keys';
 import { pointerAction } from './computer-pointer';
 import { screenshotFrames } from './coordinate-frame';
 import { type Size, screenshotSize, zoomOutputSize } from './screenshot-size';
@@ -275,6 +283,11 @@ async function pointer(args: PointerArgs, prompt: ApprovalPrompt, input: BidiInp
   return [text, ...(await captureScreenshot(outcome.screenshot, 1))];
 }
 
+async function keyboard(args: KeyboardArgs, prompt: ApprovalPrompt, input: BidiInputChannel | undefined): Promise<ContentBlock[]> {
+  const outcome = await keyboardAction(args, prompt, input);
+  return [{ type: 'text', text: outcome.text }];
+}
+
 export async function computer(
   args: Record<string, unknown>,
   prompt: ApprovalPrompt,
@@ -290,6 +303,9 @@ export async function computer(
       return zoom(value, prompt);
     case 'wait':
       return wait(value);
+    case 'type':
+    case 'key':
+      return keyboard(value, prompt, input);
     default:
       return pointer(value, prompt, input);
   }
