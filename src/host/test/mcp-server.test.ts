@@ -84,7 +84,7 @@ describe('MCP server process', () => {
   it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text', 'find', 'form_input']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text', 'find', 'form_input', 'resize_window']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
   });
@@ -267,6 +267,19 @@ describe('MCP server process', () => {
     expect(Object.keys(formInput?.inputSchema.properties ?? {})).toEqual(['ref', 'value', 'tabId']);
     expect(formInput?.inputSchema.required).toEqual(['ref', 'value']);
     expect(formInput?.description).toMatch(/read_page or find/);
+  });
+
+  it('lists resize_window with a required width and height and an optional tabId', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const resize = tools.find((tool) => tool.name === 'resize_window');
+    expect(resize?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: { width: { type: 'number', minimum: 1, exclusiveMaximum: 7681 }, height: { type: 'number', minimum: 1, exclusiveMaximum: 4321 }, tabId: { type: 'integer' } },
+    });
+    expect(Object.keys(resize?.inputSchema.properties ?? {})).toEqual(['width', 'height', 'tabId']);
+    expect(resize?.inputSchema.required).toEqual(['width', 'height']);
+    expect(resize?.description).toMatch(/viewport/);
   });
 
   it('returns a screenshot from the extension as MCP text and image content', async () => {

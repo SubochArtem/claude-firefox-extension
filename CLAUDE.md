@@ -39,6 +39,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Permissions: per-site (host, optional subdomain wildcard) allow/deny once/always records in `storage.local`, deny wins, only http(s) URLs; agent tabs in a "Claude" container by default; see [Permissions](docs/decisions.md#permissions).
 - Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events (`isTrusted=false`, the result carries a warning) only when the host reports BiDi itself unavailable (closed or non-BiDi port, refused `session.new`, tab's context not found), never for other input errors or a lost native port; the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated, except by `scroll` (Firefox ignores wheel scrolling in background tabs); see [Input](docs/decisions.md#input-webdriver-bidi).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
+- DevTools tools: `resize_window` resizes normal windows only, with no site permission, resets the window state to normal and reports the actual size; `javascript_tool` runs through BiDi `script.evaluate` in the page's main realm (bypasses page CSP), falling back to `scripting.executeScript` in the MAIN world only when BiDi is unavailable, behind an `execute_javascript` site permission; console and network capture start per tab on the first read call; see [DevTools tools](docs/decisions.md#devtools-tools).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -154,6 +155,8 @@ src/                   npm package root; every command is run from here
       find.ts          find tool: runs the find entry point of the read_page bundle on top of page-script.ts
       form-input-input.ts  pure argument validation for form_input
       form-input.ts    form_input tool: runs the form_input entry point of the read_page bundle behind the type permission
+      resize-window-input.ts  pure argument validation for resize_window: sizes floored, 1 to 7680x4320
+      resize-window.ts  resize_window tool: windows.update of the tab's normal window (state reset to normal), reports requested and actual size
       tab-access.ts    shared tab helpers for page tools: resolve the target tab, restricted domains, permission and restricted page messages
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point

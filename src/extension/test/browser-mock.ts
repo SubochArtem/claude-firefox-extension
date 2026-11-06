@@ -133,6 +133,9 @@ export function mockBrowser() {
       throw new Error('windows.create is not mocked');
     }),
     remove: vi.fn<(windowId: number) => Promise<void>>(async () => {}),
+    update: vi.fn<(windowId: number, updateInfo: browser.windows._UpdateUpdateInfo) => Promise<Partial<browser.windows.Window>>>(
+      async (windowId) => ({ id: windowId }),
+    ),
     onRemoved: createEvent<[windowId: number]>(),
   };
   const runtime = {
