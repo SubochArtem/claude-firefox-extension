@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest';
 import { installReadPage } from '../page/read-page';
+import { ELEMENT_POINT_ENTRY, type ElementPointEntry } from '../page/element-point-api';
 import { FIND_ENTRY, type FindEntry } from '../page/find-api';
 import { FORM_INPUT_ENTRY, type FormInputEntry } from '../page/form-input-api';
 import { READ_PAGE_ENTRY, type ReadPageEntry } from '../page/read-page-api';
@@ -15,6 +16,8 @@ function entryOf(scope: Record<string, unknown>): ReadPageEntry {
 
 afterEach(() => {
   document.body.innerHTML = '';
+  delete (document.documentElement as Partial<Record<'clientWidth' | 'clientHeight', number>>).clientWidth;
+  delete (document.documentElement as Partial<Record<'clientWidth' | 'clientHeight', number>>).clientHeight;
 });
 
 describe('installReadPage', () => {
@@ -56,6 +59,7 @@ describe('installReadPage', () => {
     expect(scope[READ_PAGE_ENTRY]).not.toBe(oldReadPage);
     expect(scope[FIND_ENTRY]).not.toBe(oldFind);
     expect(typeof scope[FORM_INPUT_ENTRY]).toBe('function');
+    expect(typeof scope[ELEMENT_POINT_ENTRY]).toBe('function');
     document.body.innerHTML = '<input aria-label="City" value="Rome">';
     const tree = entryOf(scope)(OPTIONS);
     const ref = tree.ok ? (/ref_\d+/.exec(tree.tree)?.[0] ?? '') : '';
@@ -92,5 +96,23 @@ describe('installReadPage', () => {
     expect(formInput({ ref, value: 'Paris' })).toEqual({ ok: true, text: 'Set text value to "Paris" (previous: "Rome")' });
     expect(document.querySelector('input')?.value).toBe('Paris');
     expect(formInput({ ref: 'ref_999', value: 'x' })).toEqual({ ok: false, error: expect.stringMatching(/^ref_999 was not found/) });
+  });
+
+  it('installs the element point entry with the same registry, so refs from find work with it', () => {
+    const scope: Record<string, unknown> = {};
+    const view = { innerWidth: 1000, innerHeight: 600 } as Window;
+    installReadPage(scope, document, view);
+    const find = scope[FIND_ENTRY] as FindEntry;
+    const point = scope[ELEMENT_POINT_ENTRY] as ElementPointEntry;
+    document.body.innerHTML = '<button>Buy now</button>';
+    const element = document.querySelector('button');
+    if (!element) throw new Error('no button');
+    element.getBoundingClientRect = () => DOMRect.fromRect({ x: 10, y: 20, width: 100, height: 40 });
+    Object.defineProperty(document.documentElement, 'clientWidth', { configurable: true, value: 1000 });
+    Object.defineProperty(document.documentElement, 'clientHeight', { configurable: true, value: 600 });
+    const found = find({ query: 'buy now' });
+    const ref = found.ok ? (/ref_\d+/.exec(found.text)?.[0] ?? '') : '';
+    expect(point({ ref })).toEqual({ ok: true, x: 60, y: 40 });
+    expect(point({ ref: 'ref_999' })).toEqual({ ok: false, error: expect.stringMatching(/^ref_999 was not found/) });
   });
 });

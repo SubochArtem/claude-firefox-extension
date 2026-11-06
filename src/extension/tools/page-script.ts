@@ -57,11 +57,14 @@ function isMissing(value: unknown): value is Missing {
   return typeof value === 'object' && value !== null && (value as Record<string, unknown>).missing === true;
 }
 
-async function requireSameSite(tool: string, tabId: number, host: string, access: PageAccess): Promise<void> {
+// Resolves with the tab's current URL while it is still on host.
+export async function requireSameSite(tool: string, tabId: number, host: string, access: PageAccess): Promise<string> {
   const tab = await browser.tabs.get(tabId).catch(() => undefined);
   if (!tab) throw new ToolError(`Cannot ${access.label.target} tab ${tabId}: the tab was closed`);
-  const site = siteForUrl(tab.url ?? '');
+  const url = tab.url ?? '';
+  const site = siteForUrl(url);
   if (!site.ok || site.host !== host) throw new ToolError(access.pageChanged(tool, tabId, host));
+  return url;
 }
 
 async function injectionFailure(tabId: number, url: string, error: unknown, label: ActionLabel): Promise<ToolError> {
@@ -125,14 +128,21 @@ function withTimeout<T>(promise: Promise<T>, tool: string, tabId: number, target
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-// Runs a page bundle's entry point in a tab after the site gate for the access's action.
-export async function readTabPage<Options, Result>(
+// A tab that passed the site gate: host is the host the user allowed for this call, url the tab's URL
+// after the gate.
+export interface OpenTab {
+  tabId: number;
+  url: string;
+  host: string;
+}
+
+// Resolves the tab and runs the site gate for the access's action, without touching the page.
+export async function openTabPage(
   tool: string,
   requestedTabId: number | undefined,
   prompt: ApprovalPrompt,
-  script: PageScript<Options, Result>,
   access: PageAccess = READ_ACCESS,
-): Promise<Result> {
+): Promise<OpenTab> {
   const { label } = access;
   const tab = await resolveTab(requestedTabId, label);
   const url = tab.url ?? '';
@@ -145,11 +155,31 @@ export async function readTabPage<Options, Result>(
     { url, tool, action: access.action, subject: `Cannot ${label.target} tab ${tab.id} (${url})` },
     prompt,
   );
+  // The tab may navigate while the permission prompt is open.
+  return { tabId: tab.id, url: await requireSameSite(tool, tab.id, host, access), host };
+}
 
-  // The tab may navigate while the permission prompt is open or while the script runs; content of a
-  // page on another site is never returned.
-  await requireSameSite(tool, tab.id, host, access);
-  const result = await withTimeout(runInPage(tab.id, url, script, label), tool, tab.id, label.target);
-  await requireSameSite(tool, tab.id, host, access);
+// Runs a page bundle's entry point in a tab that passed openTabPage; content of a page on another site
+// is never returned.
+export async function runOnTabPage<Options, Result>(
+  tool: string,
+  tab: OpenTab,
+  script: PageScript<Options, Result>,
+  access: PageAccess = READ_ACCESS,
+): Promise<Result> {
+  const { label } = access;
+  const result = await withTimeout(runInPage(tab.tabId, tab.url, script, label), tool, tab.tabId, label.target);
+  await requireSameSite(tool, tab.tabId, tab.host, access);
   return result;
+}
+
+// Runs a page bundle's entry point in a tab after the site gate for the access's action.
+export async function readTabPage<Options, Result>(
+  tool: string,
+  requestedTabId: number | undefined,
+  prompt: ApprovalPrompt,
+  script: PageScript<Options, Result>,
+  access: PageAccess = READ_ACCESS,
+): Promise<Result> {
+  return runOnTabPage(tool, await openTabPage(tool, requestedTabId, prompt, access), script, access);
 }

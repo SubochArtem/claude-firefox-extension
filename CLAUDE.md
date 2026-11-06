@@ -37,7 +37,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Screenshots: one `computer` tool whose action enum grows per feature; `tabs.captureTab` without activating the tab, fitted to 1568 px / 1568 tokens, JPEG quality stepped down to fit about 1 MB; `<all_urls>` granted manually in about:addons until `feature/permissions`; see [Screenshots](docs/decisions.md#screenshots).
 - Tab scope: the agent may navigate and close any tab in any normal window (user decision); with `feature/permissions` every action on a site is checked against that site's permission.
 - Permissions: per-site (host, optional subdomain wildcard) allow/deny once/always records in `storage.local`, deny wins, only http(s) URLs; agent tabs in a "Claude" container by default; see [Permissions](docs/decisions.md#permissions).
-- Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events in a later pull request (its results carry a warning); the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated; see [Input](docs/decisions.md#input-webdriver-bidi).
+- Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events in a later pull request (its results carry a warning); the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated, except by `scroll` (Firefox ignores wheel scrolling in background tabs); see [Input](docs/decisions.md#input-webdriver-bidi).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
@@ -111,7 +111,9 @@ src/                   npm package root; every command is run from here
       find-api.ts      find entry point name and result types shared with the tool
       form-input.ts    form_input in the page: resolves the ref, validates the value per element type, sets it through native setters, fires input/change, redacts sensitive fields
       form-input-api.ts  form_input entry point name, value and result types shared with the tool
-      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page, find and form_input entry points once per document, sharing one ref registry
+      element-point.ts  ref target for pointer actions: resolves the ref, scrolls it into view (centered, instant), returns its center in viewport CSS pixels
+      element-point-api.ts  element point entry point name, options and result types shared with the computer tool
+      read-page.ts     entry of the injected bundle dist/extension/page/read-page.js: installs the read_page, find, form_input and element point entry points once per document, sharing one ref registry
       read-page-api.ts  entry point name, script path and result types shared with the tool
       main-text.ts     page text: content root selection, whitespace normalisation, truncation
       page-text.ts     entry of the injected bundle dist/extension/page/page-text.js: installs the get_page_text entry point once per document
@@ -129,18 +131,19 @@ src/                   npm package root; every command is run from here
       prompt.html, prompt.ts  the prompt page: host, action, tool, allow/deny once/always, include subdomains
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
-      computer-input.ts  pure argument validation for the computer tool (screenshot and zoom actions)
+      computer-input.ts  pure argument validation for the computer tool (screenshot, zoom, clicks, hover, drag, scroll, scroll_to, wait)
       screenshot-size.ts  screenshot frame and output sizes within the image token budget
-      coordinate-frame.ts  per-tab last screenshot frame, maps frame coordinates to viewport CSS pixels
+      coordinate-frame.ts  per-tab last screenshot frame (shared screenshotFrames), maps frame coordinates to viewport CSS pixels
       navigate.ts      navigate tool: tabs.update/goBack/goForward, waits on webNavigation events
       tabs.ts          tabs_create and tabs_close tools
-      computer.ts      computer tool, actions screenshot and zoom: tabs.captureTab, JPEG resize and quality stepping, coordinate frames
+      computer.ts      computer tool: screenshot and zoom (tabs.captureTab, JPEG resize and quality stepping, coordinate frames), wait, dispatch of pointer actions, screenshot after scroll
+      computer-pointer.ts  pointer actions of the computer tool: site gate, frame or ref targets, BiDi input, landed-site re-check after the input
       input-keys.ts    key text parsing: WebDriver key values, chords and modifier aliases, typed text to key values, page zoom and reload shortcut detection
       input-actions.ts  WebDriver BiDi input.performActions sources for key, type, click, hover, drag and scroll, modifiers held tick-aligned with the pointer
       bidi-input.ts    performInput: marks the tab in the page's main world, asks the native host to run BiDi input, removes the marker; request channel over the native port
       read-page-input.ts  pure argument validation for read_page
       read-page.ts     read_page tool: options, result check and output on top of page-script.ts
-      page-script.ts   shared runner for page bundles: site gate for the tool's action, landed-site re-checks, injects the bundle only when missing, restricted page and timeout errors
+      page-script.ts   shared runner for page bundles: site gate for the tool's action (openTabPage), landed-site re-checks, injects the bundle only when missing (runOnTabPage), restricted page and timeout errors
       page-text-input.ts  pure argument validation for get_page_text
       page-text.ts     get_page_text tool: title, URL, source element and text of the page
       find-input.ts    pure argument validation for find

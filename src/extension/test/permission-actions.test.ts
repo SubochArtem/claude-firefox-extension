@@ -32,7 +32,15 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('tabs_close', { tabId: 1 })).toBe('navigate');
   });
 
-  it.each(['screenshot', 'zoom'])('maps the computer %s action to read_page_content', (action) => {
+  it.each(['left_click', 'right_click', 'double_click', 'triple_click', 'left_click_drag'])('maps the computer %s action to click', (action) => {
+    expect(permissionActionForTool('computer', { action, coordinate: [1, 2] })).toBe('click');
+  });
+
+  it('needs no permission for the computer wait action', () => {
+    expect(permissionActionForTool('computer', { action: 'wait', duration: 1 })).toBeUndefined();
+  });
+
+  it.each(['screenshot', 'zoom', 'hover', 'scroll', 'scroll_to'])('maps the computer %s action to read_page_content', (action) => {
     expect(permissionActionForTool('computer', { action, tabId: 1 })).toBe('read_page_content');
   });
 
@@ -63,6 +71,7 @@ describe('permissionActionForTool', () => {
 
   it.each([
     ['computer', { action: 'click' }],
+    ['computer', { action: 'type' }],
     ['computer', {}],
     ['tabs_context', {}],
     ['unknown_tool', {}],

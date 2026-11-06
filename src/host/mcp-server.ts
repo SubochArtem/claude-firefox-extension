@@ -209,11 +209,25 @@ function isOpen(socket: Socket): boolean {
   return !socket.destroyed && !socket.readableEnded && !socket.writableEnded;
 }
 
+const coordinateSchema = z.array(z.number()).length(2);
+
 export const computerInputSchema = z.strictObject({
   action: z
-    .enum(['screenshot', 'zoom'])
+    .enum([
+      'screenshot',
+      'zoom',
+      'left_click',
+      'right_click',
+      'double_click',
+      'triple_click',
+      'hover',
+      'left_click_drag',
+      'scroll',
+      'scroll_to',
+      'wait',
+    ])
     .describe(
-      'Action to perform; "screenshot" captures the visible part of the tab, "zoom" captures a region of the last screenshot at higher resolution',
+      'Action to perform; "screenshot" captures the visible part of the tab, "zoom" captures a region of the last screenshot at higher resolution, the click actions and "hover" move the mouse to a coordinate or an element, "left_click_drag" drags from start_coordinate to coordinate, "scroll" turns the mouse wheel at a coordinate and returns a new screenshot, "scroll_to" scrolls an element into view, "wait" pauses',
     ),
   tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
   region: z
@@ -231,6 +245,42 @@ export const computerInputSchema = z.strictObject({
     .describe(
       'Screenshot and zoom: shrink the returned image by this factor (0.1 to 1, default 1) to save tokens. Coordinates always refer to the full-resolution screenshot frame, never to the scaled image.',
     ),
+  coordinate: coordinateSchema
+    .optional()
+    .describe(
+      '[x, y] in the tab\'s last screenshot frame. Clicks and hover: the target, or pass ref instead (not both). left_click_drag: where the drag ends. scroll: where the wheel turns, required. Take a screenshot first; a point outside it is refused.',
+    ),
+  start_coordinate: coordinateSchema
+    .optional()
+    .describe('left_click_drag only, required there: [x, y] in the last screenshot frame where the drag starts'),
+  ref: z
+    .string()
+    .regex(/^ref_\d+$/)
+    .optional()
+    .describe(
+      'Clicks, hover and scroll_to: element reference ref_N from read_page or find; the element is scrolled into view and its center is used. Clicks and hover take ref or coordinate, not both; scroll_to requires ref.',
+    ),
+  modifiers: z
+    .string()
+    .optional()
+    .describe('Clicks only: modifier keys held during the click, joined with "+", e.g. "ctrl", "shift", "ctrl+shift", "alt", "meta"'),
+  scroll_direction: z
+    .enum(['up', 'down', 'left', 'right'])
+    .optional()
+    .describe('scroll only, required there: direction to scroll'),
+  scroll_amount: z
+    .number()
+    .int()
+    .min(1)
+    .max(10)
+    .optional()
+    .describe('scroll only: number of wheel ticks (1 to 10, default 3)'),
+  duration: z
+    .number()
+    .positive()
+    .max(10)
+    .optional()
+    .describe('wait only, required there: seconds to wait (more than 0, at most 10)'),
 });
 
 export const readPageInputSchema = z.strictObject({
@@ -398,7 +448,7 @@ export async function runMcpServer(): Promise<void> {
     'computer',
     {
       description:
-        'Interact with a browser tab. "screenshot" captures the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. "zoom" captures the region [x0, y0, x1, y1] of the last screenshot frame at up to device resolution to read small details; it does not change the frame, so coordinates keep referring to the last screenshot. More actions will be added.',
+        'Interact with a browser tab. "screenshot" captures the visible part of the tab as a JPEG image without switching to it or bringing it to the front. Defaults to the active tab; get other tab ids from tabs_context. The image is downscaled to stay within the image token budget; later actions take coordinates in the returned screenshot frame. "zoom" captures the region [x0, y0, x1, y1] of the last screenshot frame at up to device resolution to read small details; it does not change the frame, so coordinates keep referring to the last screenshot. "left_click", "right_click", "double_click" and "triple_click" click at coordinate or on an element ref (optionally holding modifiers), "hover" moves the mouse there, "left_click_drag" drags with the left button from start_coordinate to coordinate. Input is sent as real mouse events through WebDriver BiDi, so Firefox must be started with --remote-debugging-port; background tabs receive it without being activated. "scroll" turns the mouse wheel at coordinate by scroll_amount ticks in scroll_direction and returns a new screenshot, which becomes the new coordinate frame. "scroll_to" scrolls the element ref into view. "wait" pauses for duration seconds. Keyboard actions will be added.',
       inputSchema: computerInputSchema,
     },
     forward('computer'),

@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { COMPUTER_ACTIONS, parseComputerArgs } from '../tools/computer-input';
+import { CLICK_ACTIONS, COMPUTER_ACTIONS, parseComputerArgs, SCROLL_DIRECTIONS } from '../tools/computer-input';
 
 describe('parseComputerArgs', () => {
   it('lists the supported actions', () => {
-    expect(COMPUTER_ACTIONS).toEqual(['screenshot', 'zoom']);
+    expect(COMPUTER_ACTIONS).toEqual([
+      'screenshot',
+      'zoom',
+      'left_click',
+      'right_click',
+      'double_click',
+      'triple_click',
+      'hover',
+      'left_click_drag',
+      'scroll',
+      'scroll_to',
+      'wait',
+    ]);
   });
 
   it('parses a bare screenshot', () => {
@@ -46,7 +58,7 @@ describe('parseComputerArgs', () => {
   it('requires action', () => {
     expect(parseComputerArgs({})).toEqual({
       ok: false,
-      error: 'Missing required parameter action (one of: screenshot, zoom)',
+      error: `Missing required parameter action (one of: ${COMPUTER_ACTIONS.join(', ')})`,
     });
   });
 
@@ -60,7 +72,7 @@ describe('parseComputerArgs', () => {
   it.each(['click', 'Screenshot', '', 'toString', '__proto__'])('rejects unknown action %j', (action) => {
     expect(parseComputerArgs({ action })).toEqual({
       ok: false,
-      error: `Unknown action ${JSON.stringify(action)}; supported actions: screenshot, zoom`,
+      error: `Unknown action ${JSON.stringify(action)}; supported actions: ${COMPUTER_ACTIONS.join(', ')}`,
     });
   });
 
@@ -154,5 +166,186 @@ describe('parseComputerArgs zoom', () => {
       ok: false,
       error: 'Unknown parameter "coordinate" for action "zoom"; allowed: action, tabId, region, scale',
     });
+  });
+});
+
+describe.each(CLICK_ACTIONS)('parseComputerArgs %s', (action) => {
+  it('parses a coordinate target with modifiers and tabId', () => {
+    expect(parseComputerArgs({ action, coordinate: [10, 20.5], modifiers: 'ctrl+shift', tabId: 4 })).toEqual({
+      ok: true,
+      value: { action, target: { coordinate: [10, 20.5] }, modifiers: 'ctrl+shift', tabId: 4 },
+    });
+  });
+
+  it('parses a ref target', () => {
+    expect(parseComputerArgs({ action, ref: 'ref_12' })).toEqual({ ok: true, value: { action, target: { ref: 'ref_12' } } });
+  });
+
+  it('refuses coordinate and ref together', () => {
+    expect(parseComputerArgs({ action, coordinate: [1, 2], ref: 'ref_1' })).toEqual({
+      ok: false,
+      error: `coordinate and ref are mutually exclusive for action "${action}"; pass only one of them`,
+    });
+  });
+
+  it('requires a target', () => {
+    expect(parseComputerArgs({ action })).toEqual({
+      ok: false,
+      error: `Action "${action}" needs a target: coordinate ([x, y] in the last screenshot frame) or ref (ref_12 from read_page or find)`,
+    });
+  });
+
+  it.each([
+    [{ coordinate: [1] }, 'coordinate must be an array of 2 numbers [x, y], received 1 elements'],
+    [{ coordinate: [1, 2, 3] }, 'coordinate must be an array of 2 numbers [x, y], received 3 elements'],
+    [{ coordinate: '1,2' }, 'coordinate must be an array of 2 numbers [x, y], received "1,2"'],
+    [{ coordinate: [1, '2'] }, 'coordinate[1] must be a finite number, received "2"'],
+    [{ coordinate: [Number.NaN, 2] }, 'coordinate[0] must be a finite number, received NaN'],
+    [{ ref: 'button' }, 'ref must look like ref_12 (from read_page or find), received "button"'],
+    [{ ref: 12 }, 'ref must be a string, received 12'],
+    [{ coordinate: [1, 2], modifiers: 'hyper' }, 'modifiers: Unknown modifier "hyper" in "hyper"; use names like "ctrl+shift"'],
+    [{ coordinate: [1, 2], modifiers: 3 }, 'modifiers must be a string, received 3'],
+    [{ coordinate: [1, 2], tabId: 0 }, 'tabId must be a positive safe integer, received 0'],
+  ])('rejects %j', (args, error) => {
+    expect(parseComputerArgs({ action, ...args })).toEqual({ ok: false, error });
+  });
+
+  it('rejects parameters of other actions', () => {
+    expect(parseComputerArgs({ action, coordinate: [1, 2], scroll_amount: 3 })).toEqual({
+      ok: false,
+      error: `Unknown parameter "scroll_amount" for action "${action}"; allowed: action, tabId, coordinate, ref, modifiers`,
+    });
+  });
+});
+
+describe('parseComputerArgs hover', () => {
+  it('parses a coordinate or a ref target', () => {
+    expect(parseComputerArgs({ action: 'hover', coordinate: [3, 4] })).toEqual({
+      ok: true,
+      value: { action: 'hover', target: { coordinate: [3, 4] } },
+    });
+    expect(parseComputerArgs({ action: 'hover', ref: 'ref_2', tabId: 7 })).toEqual({
+      ok: true,
+      value: { action: 'hover', target: { ref: 'ref_2' }, tabId: 7 },
+    });
+  });
+
+  it('refuses coordinate and ref together and requires one', () => {
+    expect(parseComputerArgs({ action: 'hover', coordinate: [1, 2], ref: 'ref_1' })).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('mutually exclusive'),
+    });
+    expect(parseComputerArgs({ action: 'hover' })).toMatchObject({ ok: false, error: expect.stringContaining('needs a target') });
+  });
+
+  it('takes no modifiers', () => {
+    expect(parseComputerArgs({ action: 'hover', coordinate: [1, 2], modifiers: 'ctrl' })).toEqual({
+      ok: false,
+      error: 'Unknown parameter "modifiers" for action "hover"; allowed: action, tabId, coordinate, ref',
+    });
+  });
+});
+
+describe('parseComputerArgs left_click_drag', () => {
+  it('parses start and end coordinates', () => {
+    expect(parseComputerArgs({ action: 'left_click_drag', start_coordinate: [1, 2], coordinate: [30, 40], tabId: 3 })).toEqual({
+      ok: true,
+      value: { action: 'left_click_drag', start: [1, 2], end: [30, 40], tabId: 3 },
+    });
+  });
+
+  it('requires both coordinates', () => {
+    expect(parseComputerArgs({ action: 'left_click_drag', coordinate: [1, 2] })).toEqual({
+      ok: false,
+      error: 'Missing required parameter start_coordinate ([x, y] in the last screenshot frame) for action "left_click_drag"',
+    });
+    expect(parseComputerArgs({ action: 'left_click_drag', start_coordinate: [1, 2] })).toEqual({
+      ok: false,
+      error: 'Missing required parameter coordinate ([x, y] in the last screenshot frame) for action "left_click_drag"',
+    });
+  });
+
+  it('takes no ref', () => {
+    expect(parseComputerArgs({ action: 'left_click_drag', start_coordinate: [1, 2], coordinate: [3, 4], ref: 'ref_1' })).toEqual({
+      ok: false,
+      error: 'Unknown parameter "ref" for action "left_click_drag"; allowed: action, tabId, start_coordinate, coordinate',
+    });
+  });
+});
+
+describe('parseComputerArgs scroll', () => {
+  it('parses a scroll with the default amount', () => {
+    expect(parseComputerArgs({ action: 'scroll', coordinate: [5, 6], scroll_direction: 'down' })).toEqual({
+      ok: true,
+      value: { action: 'scroll', coordinate: [5, 6], direction: 'down', amount: 3 },
+    });
+  });
+
+  it.each(SCROLL_DIRECTIONS)('accepts direction %s', (direction) => {
+    expect(parseComputerArgs({ action: 'scroll', coordinate: [5, 6], scroll_direction: direction, scroll_amount: 10, tabId: 2 })).toEqual({
+      ok: true,
+      value: { action: 'scroll', coordinate: [5, 6], direction, amount: 10, tabId: 2 },
+    });
+  });
+
+  it.each([
+    [{ scroll_direction: 'down' }, 'Missing required parameter coordinate ([x, y] in the last screenshot frame) for action "scroll"'],
+    [{ coordinate: [1, 2] }, 'Missing required parameter scroll_direction (one of: up, down, left, right) for action "scroll"'],
+    [{ coordinate: [1, 2], scroll_direction: 'sideways' }, 'scroll_direction must be one of: up, down, left, right, received "sideways"'],
+    [{ coordinate: [1, 2], scroll_direction: 1 }, 'scroll_direction must be one of: up, down, left, right, received 1'],
+    [{ coordinate: [1, 2], scroll_direction: 'up', scroll_amount: 0 }, 'scroll_amount must be an integer between 1 and 10, received 0'],
+    [{ coordinate: [1, 2], scroll_direction: 'up', scroll_amount: 11 }, 'scroll_amount must be an integer between 1 and 10, received 11'],
+    [{ coordinate: [1, 2], scroll_direction: 'up', scroll_amount: 1.5 }, 'scroll_amount must be an integer between 1 and 10, received 1.5'],
+    [{ coordinate: [1, 2], scroll_direction: 'up', scroll_amount: '3' }, 'scroll_amount must be an integer between 1 and 10, received "3"'],
+  ])('rejects %j', (args, error) => {
+    expect(parseComputerArgs({ action: 'scroll', ...args })).toEqual({ ok: false, error });
+  });
+
+  it('takes no ref', () => {
+    expect(parseComputerArgs({ action: 'scroll', ref: 'ref_1', scroll_direction: 'up' })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^Unknown parameter "ref" for action "scroll"/),
+    });
+  });
+});
+
+describe('parseComputerArgs scroll_to', () => {
+  it('parses a ref', () => {
+    expect(parseComputerArgs({ action: 'scroll_to', ref: 'ref_9', tabId: 1 })).toEqual({
+      ok: true,
+      value: { action: 'scroll_to', ref: 'ref_9', tabId: 1 },
+    });
+  });
+
+  it('requires a ref and takes no coordinate', () => {
+    expect(parseComputerArgs({ action: 'scroll_to' })).toEqual({
+      ok: false,
+      error: 'Missing required parameter ref (an element reference like ref_12 from read_page or find) for action "scroll_to"',
+    });
+    expect(parseComputerArgs({ action: 'scroll_to', coordinate: [1, 2] })).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/^Unknown parameter "coordinate" for action "scroll_to"/),
+    });
+  });
+});
+
+describe('parseComputerArgs wait', () => {
+  it.each([0.5, 1, 10])('accepts duration %s', (duration) => {
+    expect(parseComputerArgs({ action: 'wait', duration })).toEqual({ ok: true, value: { action: 'wait', duration } });
+  });
+
+  it('accepts and ignores a tabId', () => {
+    expect(parseComputerArgs({ action: 'wait', duration: 1, tabId: 3 })).toEqual({ ok: true, value: { action: 'wait', duration: 1 } });
+  });
+
+  it.each([
+    [undefined, 'Missing required parameter duration (seconds, up to 10) for action "wait"'],
+    [0, 'duration must be greater than 0 and at most 10 seconds, received 0'],
+    [-1, 'duration must be greater than 0 and at most 10 seconds, received -1'],
+    [10.5, 'duration must be greater than 0 and at most 10 seconds, received 10.5'],
+    ['2', 'duration must be a finite number of seconds, received "2"'],
+    [Number.POSITIVE_INFINITY, 'duration must be a finite number of seconds, received Infinity'],
+  ])('rejects duration %s', (duration, error) => {
+    expect(parseComputerArgs({ action: 'wait', duration })).toEqual({ ok: false, error });
   });
 });

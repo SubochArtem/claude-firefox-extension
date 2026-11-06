@@ -350,7 +350,7 @@ describe('permission prompts through the MCP client', () => {
 });
 
 describe('bidi input channel', () => {
-  // No tool sends input yet, so the channel the bridge creates per port is captured from the factory.
+  // The channel the bridge creates per port is captured from the factory.
   async function bridgeWithChannels() {
     const channels: import('../tools/bidi-input').BidiInputChannel[] = [];
     vi.resetModules();
@@ -383,6 +383,22 @@ describe('bidi input channel', () => {
     port.emitMessage({ type: 'bidi_input_response', requestId: sent['requestId'], ok: false, error: 'no tab' });
     await expect(result).resolves.toEqual({ ok: false, error: 'no tab' });
     expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('passes the channel of the port to tool calls', async () => {
+    const executeTool = vi.fn(async (request: { id: string }) => ({ type: 'tool_response', id: request.id, result: { content: [] } }));
+    vi.doMock('../tools', () => ({ executeTool }));
+    onTestFinished(() => {
+      vi.doUnmock('../tools');
+    });
+    const channels = await bridgeWithChannels();
+    const port = connectAndPong();
+    const request = { type: 'tool_request', id: '1:1', tool: 'computer', args: { action: 'left_click', coordinate: [1, 2] } };
+    port.emitMessage(request);
+    await flushPromises();
+    expect(channels).toHaveLength(1);
+    expect(executeTool).toHaveBeenCalledWith(request, expect.anything(), channels[0]);
+    expect(port.postMessage).toHaveBeenLastCalledWith({ type: 'tool_response', id: '1:1', result: { content: [] } });
   });
 
   it('fails pending input requests when the port disconnects', async () => {
