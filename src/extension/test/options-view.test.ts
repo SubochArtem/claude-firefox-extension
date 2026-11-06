@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PermissionRecord } from '../permissions/permission-model';
-import { permissionRows } from '../options/options-view';
+import { apiKeyStatus, permissionRows } from '../options/options-view';
 
 const time = (ms: number) => `t${ms}`;
 
@@ -42,5 +42,21 @@ describe('options page permission rows', () => {
   it('keeps hosts as plain strings for textContent', () => {
     const [row] = permissionRows([record({ host: 'xn--80ak6aa92e.com' })], time);
     expect(row?.site).toBe('xn--80ak6aa92e.com');
+  });
+});
+
+describe('options page API key status', () => {
+  it('says the key is not set when it is empty', () => {
+    expect(apiKeyStatus('')).toBe('No API key is saved.');
+  });
+
+  it('shows only the last 4 characters of a saved key', () => {
+    const status = apiKeyStatus('sk-ant-api03-abcdefghijklmnop-WXYZ');
+    expect(status).toBe('An API key ending in WXYZ is saved.');
+    expect(status).not.toContain('sk-ant');
+  });
+
+  it('shows no characters of a short key', () => {
+    expect(apiKeyStatus('abcdefghijk')).toBe('An API key is saved.');
   });
 });
