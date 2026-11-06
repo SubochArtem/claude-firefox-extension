@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BIDI_PORT_ENV, BidiError, bidiPort, connectBidi, DEFAULT_BIDI_PORT } from '../bidi-client';
+import { BIDI_PORT_ENV, BidiError, bidiPort, BidiUnavailableError, connectBidi, DEFAULT_BIDI_PORT } from '../bidi-client';
 import { BIDI_ABORT_CLEANUP_TIMEOUT_MS, createSerialQueue, runBidiInput, type BidiInputTimeouts } from '../bidi-input';
 import { closedPort, HANG, startFakeBidi, startPlainHttp, type FakeBidi } from './fake-bidi';
 import { waitFor } from './helpers';
@@ -232,6 +232,63 @@ describe('runBidiInput', () => {
 
     fake.contexts.splice(1, 1);
     await expect(runBidiInput(request(), fake.port, FAST)).rejects.toThrow('(1 of 1 checked contexts did not answer)');
+  });
+});
+
+describe('runBidiInput unavailable classification', () => {
+  async function failureOf(run: Promise<void>): Promise<unknown> {
+    const error = await run.catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(BidiError);
+    return error;
+  }
+
+  it('marks a closed port as unavailable', async () => {
+    const port = await closedPort();
+    expect(await failureOf(runBidiInput(request(), port, FAST))).toBeInstanceOf(BidiUnavailableError);
+  });
+
+  it('marks a port that does not speak WebDriver BiDi as unavailable', async () => {
+    const port = await startPlainHttp();
+    expect(await failureOf(runBidiInput(request(), port, FAST))).toBeInstanceOf(BidiUnavailableError);
+  });
+
+  it('marks a refused session.new as unavailable', async () => {
+    const fake = await firefox([]);
+    fake.reply('session.new', () => ({ error: 'session not created', message: 'Maximum number of active sessions' }));
+    expect(await failureOf(runBidiInput(request(), fake.port, FAST))).toBeInstanceOf(BidiUnavailableError);
+  });
+
+  it.each([
+    ['no context shows the URL', [{ context: 'ctx-b', url: 'https://b.example/', marker: MARKER.value }]],
+    ['no context carries the marker', [{ context: 'ctx-a', url: URL_A }]],
+  ])('marks a tab that is not found as unavailable when %s', async (_name, contexts) => {
+    const fake = await firefox(contexts);
+    expect(await failureOf(runBidiInput(request(), fake.port, FAST))).toBeInstanceOf(BidiUnavailableError);
+  });
+
+  it('does not mark failed or ambiguous input as unavailable', async () => {
+    const failing = await firefox([{ context: 'ctx-a', url: URL_A, marker: MARKER.value }]);
+    failing.reply('input.performActions', () => ({ error: 'invalid argument', message: 'bad action' }));
+    expect(await failureOf(runBidiInput(request(), failing.port, FAST))).not.toBeInstanceOf(BidiUnavailableError);
+
+    const hanging = await firefox([{ context: 'ctx-a', url: URL_A, marker: MARKER.value }]);
+    hanging.reply('input.performActions', () => HANG);
+    expect(await failureOf(runBidiInput(request(), hanging.port, FAST))).not.toBeInstanceOf(BidiUnavailableError);
+
+    const slowSession = await firefox([]);
+    slowSession.reply('session.new', () => HANG);
+    expect(await failureOf(runBidiInput(request(), slowSession.port, FAST))).not.toBeInstanceOf(BidiUnavailableError);
+
+    const ambiguous = await firefox([
+      { context: 'ctx-1', url: URL_A, marker: MARKER.value },
+      { context: 'ctx-2', url: URL_A, marker: MARKER.value },
+    ]);
+    expect(await failureOf(runBidiInput(request(), ambiguous.port, FAST))).not.toBeInstanceOf(BidiUnavailableError);
+  });
+
+  it('does not mark an invalid port variable as unavailable', () => {
+    expect(() => bidiPort({ [BIDI_PORT_ENV]: 'abc' })).toThrow(BidiError);
+    expect(() => bidiPort({ [BIDI_PORT_ENV]: 'abc' })).not.toThrow(BidiUnavailableError);
   });
 });
 

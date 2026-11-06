@@ -54,7 +54,7 @@ function shown(text: string, sensitive: boolean): string {
 
 // The prototype setter skips own-property setters that frameworks such as React put on the element
 // to track its value, so they see the change when the input event arrives.
-function setNative(element: Element, prototype: object, property: string, value: unknown): void {
+export function setNative(element: Element, prototype: object, property: string, value: unknown): void {
   const setter = Object.getOwnPropertyDescriptor(prototype, property)?.set;
   if (setter) setter.call(element, value);
   else (element as unknown as Record<string, unknown>)[property] = value;

@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ELEMENT_POINT_ENTRY, type ElementPointEntry, type ElementPointResult } from '../page/element-point-api';
 import { READ_PAGE_SCRIPT } from '../page/read-page-api';
+import {
+  SYNTHETIC_INPUT_ENTRY,
+  type SyntheticInputEntry,
+  type SyntheticInputResult,
+} from '../page/synthetic-input-api';
 import type { ApprovalPrompt } from '../permissions/approval';
 import type { ClientApprovals } from '../permissions/client-prompt';
 import { deniedMessage } from '../permissions/site-access';
@@ -17,6 +22,7 @@ import {
 import { screenshotFrames } from '../tools/coordinate-frame';
 import { clickActions, dragActions, hoverActions, scrollActions } from '../tools/input-actions';
 import { unapprovedText } from '../tools/navigate';
+import { fallbackWarning } from '../tools/synthetic-input';
 import { mockBrowser } from './browser-mock';
 
 const TAB = 5;
@@ -34,6 +40,8 @@ let tabs: Map<number, Partial<browser.tabs.Tab>>;
 let entry: ReturnType<typeof vi.fn<ElementPointEntry>>;
 let pointResult: ElementPointResult;
 let inputResult: BidiInputResult;
+let synthetic: ReturnType<typeof vi.fn<SyntheticInputEntry>>;
+let syntheticResult: SyntheticInputResult;
 let channel: BidiInputChannel & { request: ReturnType<typeof vi.fn<BidiInputChannel['request']>> };
 
 function runInjection(injection: Injection): browser.scripting.InjectionResult<unknown>[] {
@@ -43,6 +51,7 @@ function runInjection(injection: Injection): browser.scripting.InjectionResult<u
   }
   if (injection.files) {
     vi.stubGlobal(ELEMENT_POINT_ENTRY, entry);
+    vi.stubGlobal(SYNTHETIC_INPUT_ENTRY, synthetic);
     return [{ frameId: 0, result: undefined }];
   }
   const func = injection.func as (...args: unknown[]) => unknown;
@@ -93,6 +102,8 @@ beforeEach(() => {
   pointResult = { ok: true, x: 150, y: 75.5 };
   entry = vi.fn<ElementPointEntry>(() => pointResult);
   inputResult = { ok: true };
+  syntheticResult = { ok: true };
+  synthetic = vi.fn<SyntheticInputEntry>(() => syntheticResult);
   channel = {
     request: vi.fn<BidiInputChannel['request']>(async () => inputResult),
     handleResponse: vi.fn(),
@@ -420,6 +431,113 @@ describe('computer pointer: input results', () => {
       inputPageChangedMessage('click in')('computer', TAB, 'example.com'),
     );
     expect(channel.request).not.toHaveBeenCalled();
+  });
+});
+
+describe('computer pointer: synthetic fallback', () => {
+  const CAUSE = 'Firefox is not listening for WebDriver BiDi on port 9222.';
+  const NONE = { ctrl: false, shift: false, alt: false, meta: false };
+
+  beforeEach(() => {
+    inputResult = { ok: false, error: CAUSE, unavailable: true };
+  });
+
+  it('clicks with synthetic events when BiDi is unavailable and warns about it', async () => {
+    expect(await text({ action: 'left_click', coordinate: [10, 20], modifiers: 'ctrl+shift' })).toBe(
+      `Clicked at (10, 20)\n${fallbackWarning(CAUSE)}`,
+    );
+    expect(channel.request).toHaveBeenCalledTimes(1);
+    expect(synthetic).toHaveBeenCalledWith({
+      kind: 'click',
+      point: { x: 20, y: 40 },
+      button: 'left',
+      clickCount: 1,
+      modifiers: { ...NONE, ctrl: true, shift: true },
+    });
+  });
+
+  it('names the cause and the remote debugging flag in the warning', () => {
+    expect(fallbackWarning(CAUSE)).toMatch(/^Warning: .*synthetic DOM events.*some pages ignore.*--remote-debugging-port/);
+    expect(fallbackWarning(CAUSE)).toContain(CAUSE);
+  });
+
+  it.each([
+    ['right_click', 'right', 1],
+    ['double_click', 'left', 2],
+    ['triple_click', 'left', 3],
+  ])('%s passes its button and click count', async (action, button, clickCount) => {
+    await text({ action, coordinate: [1, 1] });
+    expect(synthetic).toHaveBeenCalledWith(expect.objectContaining({ kind: 'click', button, clickCount }));
+  });
+
+  it('passes the ref with its point', async () => {
+    await text({ action: 'left_click', ref: 'ref_3' });
+    expect(synthetic).toHaveBeenCalledWith({
+      kind: 'click',
+      point: { x: 150, y: 75.5 },
+      ref: 'ref_3',
+      button: 'left',
+      clickCount: 1,
+      modifiers: NONE,
+    });
+  });
+
+  it('hovers and drags with synthetic events', async () => {
+    expect(await text({ action: 'hover', ref: 'ref_2' })).toBe(`Hovered over element ref_2\n${fallbackWarning(CAUSE)}`);
+    expect(synthetic).toHaveBeenLastCalledWith({ kind: 'hover', point: { x: 150, y: 75.5 }, ref: 'ref_2' });
+    await text({ action: 'left_click_drag', start_coordinate: [1, 2], coordinate: [30, 40] });
+    expect(synthetic).toHaveBeenLastCalledWith({ kind: 'drag', start: { x: 2, y: 4 }, end: { x: 60, y: 80 } });
+  });
+
+  it('scrolls with synthetic events and still attaches the screenshot', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const pending = run({ action: 'scroll', coordinate: [50, 60], scroll_direction: 'up', scroll_amount: 2 });
+    await vi.advanceTimersByTimeAsync(SCROLL_SETTLE_MS);
+    const response = await pending;
+    expect(texts(response)).toEqual([
+      `Scrolled up by 2 ticks at (50, 60)\n${fallbackWarning(CAUSE)}`,
+      'Captured screenshot (800x600, jpeg)',
+    ]);
+    expect(synthetic).toHaveBeenCalledWith({ kind: 'scroll', point: { x: 100, y: 120 }, deltaX: 0, deltaY: -200 });
+  });
+
+  it('does not fall back on a real input error', async () => {
+    inputResult = { ok: false, error: 'Firefox WebDriver BiDi input.performActions failed: invalid argument' };
+    expect(await failure({ action: 'left_click', coordinate: [1, 2] })).toBe(inputResult.error);
+    expect(synthetic).not.toHaveBeenCalled();
+  });
+
+  it('does not fall back without a native host connection', async () => {
+    expect(await failure({ action: 'left_click', coordinate: [1, 2] }, false)).toBe(
+      `Failed to send input to tab ${TAB}: the native host is not connected`,
+    );
+    expect(synthetic).not.toHaveBeenCalled();
+  });
+
+  it('reports an error from the synthetic input', async () => {
+    syntheticResult = { ok: false, error: 'There is no element at that point in the page. Take a new screenshot and try again.' };
+    expect(await failure({ action: 'left_click', coordinate: [1, 2] })).toBe(syntheticResult.error);
+  });
+
+  it('sends no synthetic input when the tab left the site during the BiDi attempt', async () => {
+    channel.request.mockImplementation(async () => {
+      navigateTab(TAB, 'https://evil.example/');
+      return inputResult;
+    });
+    expect(await failure({ action: 'left_click', coordinate: [1, 2] })).toBe(
+      inputPageChangedMessage('click in')('computer', TAB, 'example.com'),
+    );
+    expect(synthetic).not.toHaveBeenCalled();
+  });
+
+  it('checks where the tab landed after the synthetic input', async () => {
+    synthetic.mockImplementation(() => {
+      navigateTab(TAB, 'https://evil.example/login');
+      return { ok: true };
+    });
+    expect(await text({ action: 'left_click', coordinate: [1, 2] })).toBe(
+      `Clicked at (1, 2)\n${fallbackWarning(CAUSE)}\n${unapprovedText(TAB, 'evil.example')}`,
+    );
   });
 });
 

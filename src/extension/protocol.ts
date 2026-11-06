@@ -63,7 +63,8 @@ export interface BidiInputRequest {
 
 export type BidiInputResponse =
   | { type: 'bidi_input_response'; requestId: string; ok: true }
-  | { type: 'bidi_input_response'; requestId: string; ok: false; error: string };
+  // unavailable: WebDriver BiDi itself cannot be used (no listener, no session, the tab is not visible to it).
+  | { type: 'bidi_input_response'; requestId: string; ok: false; error: string; unavailable?: true };
 
 export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest;
 export type HostToExtensionMessage = { type: 'pong' } | ToolRequest | PermissionResponse | BidiInputResponse;
@@ -85,8 +86,11 @@ export function parseHostMessage(value: unknown): HostToExtensionMessage | undef
     if (typeof requestId !== 'string') return undefined;
     if (ok === true) return { type: 'bidi_input_response', requestId, ok: true };
     // A malformed reply still settles its request instead of leaving it to the timeout.
-    const text = ok === false && typeof error === 'string' ? error : 'The native host sent a malformed input response';
-    return { type: 'bidi_input_response', requestId, ok: false, error: text };
+    if (ok !== false || typeof error !== 'string') {
+      return { type: 'bidi_input_response', requestId, ok: false, error: 'The native host sent a malformed input response' };
+    }
+    const unavailable = value['unavailable'] === true ? { unavailable: true as const } : {};
+    return { type: 'bidi_input_response', requestId, ok: false, error, ...unavailable };
   }
   if (value['type'] !== 'tool_request') return undefined;
   const { id, tool, args } = value;

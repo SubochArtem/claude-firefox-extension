@@ -49,7 +49,13 @@ describe('parseHostMessage', () => {
       ok: false,
       error: 'no tab',
     });
-    for (const malformed of [{ ok: false }, { ok: 'yes' }, { ok: false, error: 1 }]) {
+    expect(
+      parseHostMessage({ type: 'bidi_input_response', requestId: 'r', ok: false, error: 'no port', unavailable: true }),
+    ).toEqual({ type: 'bidi_input_response', requestId: 'r', ok: false, error: 'no port', unavailable: true });
+    expect(
+      parseHostMessage({ type: 'bidi_input_response', requestId: 'r', ok: false, error: 'no port', unavailable: 'yes' }),
+    ).toEqual({ type: 'bidi_input_response', requestId: 'r', ok: false, error: 'no port' });
+    for (const malformed of [{ ok: false }, { ok: 'yes' }, { ok: false, error: 1 }, { ok: false, unavailable: true }]) {
       expect(parseHostMessage({ type: 'bidi_input_response', requestId: 'r', ...malformed })).toEqual({
         type: 'bidi_input_response',
         requestId: 'r',

@@ -9,6 +9,10 @@ export const BIDI_COMMAND_TIMEOUT_MS = 5_000;
 // An expected failure whose message is passed to the agent as is.
 export class BidiError extends Error {}
 
+// WebDriver BiDi itself cannot be used (no listener, no session, the tab is not visible to it); the
+// extension falls back to synthetic DOM events for these and only these.
+export class BidiUnavailableError extends BidiError {}
+
 // An error response from Firefox to one command; `code` is the BiDi error code.
 export class BidiCommandError extends BidiError {
   constructor(
@@ -51,9 +55,9 @@ function isPortClosed(port: number): Promise<boolean> {
 // apart from another program listening on it.
 async function connectFailure(port: number): Promise<BidiError> {
   if (await isPortClosed(port)) {
-    return new BidiError(`Firefox is not listening for WebDriver BiDi on port ${port}. ${startFirefoxHint(port)}`);
+    return new BidiUnavailableError(`Firefox is not listening for WebDriver BiDi on port ${port}. ${startFirefoxHint(port)}`);
   }
-  return new BidiError(
+  return new BidiUnavailableError(
     `Could not open a WebDriver BiDi connection at ws://127.0.0.1:${port}/session: the port is open, but it did not accept a WebDriver BiDi WebSocket. Another program may be using port ${port}. ${startFirefoxHint(port)}`,
   );
 }

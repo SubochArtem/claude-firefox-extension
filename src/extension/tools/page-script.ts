@@ -159,6 +159,18 @@ export async function openTabPage(
   return { tabId: tab.id, url: await requireSameSite(tool, tab.id, host, access), host };
 }
 
+// Runs a page bundle's entry point that changes the page, such as input that may navigate it; the caller
+// checks where the tab landed instead of discarding the result.
+export function changeTabPage<Options, Result>(
+  tool: string,
+  tab: OpenTab,
+  script: PageScript<Options, Result>,
+  access: PageAccess,
+): Promise<Result> {
+  const { label } = access;
+  return withTimeout(runInPage(tab.tabId, tab.url, script, label), tool, tab.tabId, label.target);
+}
+
 // Runs a page bundle's entry point in a tab that passed openTabPage; content of a page on another site
 // is never returned.
 export async function runOnTabPage<Options, Result>(
@@ -167,8 +179,7 @@ export async function runOnTabPage<Options, Result>(
   script: PageScript<Options, Result>,
   access: PageAccess = READ_ACCESS,
 ): Promise<Result> {
-  const { label } = access;
-  const result = await withTimeout(runInPage(tab.tabId, tab.url, script, label), tool, tab.tabId, label.target);
+  const result = await changeTabPage(tool, tab, script, access);
   await requireSameSite(tool, tab.tabId, tab.host, access);
   return result;
 }

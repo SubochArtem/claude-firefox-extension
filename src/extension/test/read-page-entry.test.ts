@@ -5,6 +5,7 @@ import { ELEMENT_POINT_ENTRY, type ElementPointEntry } from '../page/element-poi
 import { FIND_ENTRY, type FindEntry } from '../page/find-api';
 import { FORM_INPUT_ENTRY, type FormInputEntry } from '../page/form-input-api';
 import { READ_PAGE_ENTRY, type ReadPageEntry } from '../page/read-page-api';
+import { SYNTHETIC_INPUT_ENTRY, type SyntheticInputEntry } from '../page/synthetic-input-api';
 
 const OPTIONS = { filter: 'all', depth: 15, maxChars: 50_000 } as const;
 
@@ -60,6 +61,7 @@ describe('installReadPage', () => {
     expect(scope[FIND_ENTRY]).not.toBe(oldFind);
     expect(typeof scope[FORM_INPUT_ENTRY]).toBe('function');
     expect(typeof scope[ELEMENT_POINT_ENTRY]).toBe('function');
+    expect(typeof scope[SYNTHETIC_INPUT_ENTRY]).toBe('function');
     document.body.innerHTML = '<input aria-label="City" value="Rome">';
     const tree = entryOf(scope)(OPTIONS);
     const ref = tree.ok ? (/ref_\d+/.exec(tree.tree)?.[0] ?? '') : '';
@@ -114,5 +116,19 @@ describe('installReadPage', () => {
     const ref = found.ok ? (/ref_\d+/.exec(found.text)?.[0] ?? '') : '';
     expect(point({ ref })).toEqual({ ok: true, x: 60, y: 40 });
     expect(point({ ref: 'ref_999' })).toEqual({ ok: false, error: expect.stringMatching(/^ref_999 was not found/) });
+  });
+  it('installs the synthetic input entry with the same registry, so refs from find work with it', () => {
+    const scope: Record<string, unknown> = {};
+    installReadPage(scope, document, window);
+    const find = scope[FIND_ENTRY] as FindEntry;
+    const synthetic = scope[SYNTHETIC_INPUT_ENTRY] as SyntheticInputEntry;
+    document.body.innerHTML = '<button>Buy now</button>';
+    let clicks = 0;
+    document.querySelector('button')?.addEventListener('click', () => clicks++);
+    const found = find({ query: 'buy now' });
+    const ref = found.ok ? (/ref_\d+/.exec(found.text)?.[0] ?? '') : '';
+    const modifiers = { ctrl: false, shift: false, alt: false, meta: false };
+    expect(synthetic({ kind: 'click', point: { x: 1, y: 1 }, ref, button: 'left', clickCount: 1, modifiers })).toEqual({ ok: true });
+    expect(clicks).toBe(1);
   });
 });

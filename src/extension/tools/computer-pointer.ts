@@ -1,16 +1,27 @@
 import { ELEMENT_POINT_ENTRY, type ElementPointResult } from '../page/element-point-api';
 import { READ_PAGE_SCRIPT } from '../page/read-page-api';
+import type { SyntheticInputOptions } from '../page/synthetic-input-api';
 import type { ApprovalPrompt } from '../permissions/approval';
 import { siteForUrl } from '../permissions/site';
 import { landedSite } from '../permissions/site-access';
-import { type BidiInputChannel, performInput } from './bidi-input';
+import { type BidiInputChannel, BidiUnavailableError, performInput } from './bidi-input';
 import type { ClickAction, Coordinate, PointerArgs, PointerTarget, ScrollArgs } from './computer-input';
 import { type Point, screenshotFrames } from './coordinate-frame';
-import { clickActions, dragActions, hoverActions, type InputSource, type MouseButton, scrollActions } from './input-actions';
+import {
+  clickActions,
+  dragActions,
+  hoverActions,
+  type InputSource,
+  type MouseButton,
+  scrollActions,
+  scrollDelta,
+} from './input-actions';
+import { parseModifiers } from './input-keys';
 import { unapprovedText } from './navigate';
 import type { ParseResult } from './navigation-input';
 import { type OpenTab, openTabPage, type PageAccess, requireSameSite, runOnTabPage } from './page-script';
 import type { ActionLabel } from './tab-access';
+import { fallbackWarning, modifierFlags, runSyntheticInput } from './synthetic-input';
 import { ToolError } from './tool-error';
 
 // Smooth scrolling keeps moving the page after the wheel input is done.
@@ -87,11 +98,15 @@ function targetPoint(tab: OpenTab, target: PointerTarget, pageAccess: PageAccess
   return 'ref' in target ? elementPoint(tab, target.ref, pageAccess) : Promise.resolve(framePoint(tab, target.coordinate));
 }
 
+function refOf(target: PointerTarget): { ref?: string } {
+  return 'ref' in target ? { ref: target.ref } : {};
+}
+
 function describeCoordinate([x, y]: Coordinate): string {
   return `(${x}, ${y})`;
 }
 
-export function built(result: ParseResult<InputSource[]>): InputSource[] {
+export function built<T>(result: ParseResult<T>): T {
   if (!result.ok) throw new ToolError(`Invalid computer arguments: ${result.error}`);
   return result.value;
 }
@@ -107,9 +122,28 @@ export async function afterInput(tab: OpenTab): Promise<AfterInput> {
   return { ok: true, tab: { ...tab, url: current.url ?? tab.url } };
 }
 
-async function send(tab: OpenTab, pageAccess: PageAccess, input: BidiInputChannel | undefined, actions: InputSource[]) {
+function lines(...parts: (string | undefined)[]): string {
+  return parts.filter((part) => part !== undefined).join('\n');
+}
+
+// Synthetic DOM events are used only when the native host reports WebDriver BiDi itself as unavailable;
+// any other input failure is reported as is. Resolves with the warning for the result in that case.
+async function send(
+  tab: OpenTab,
+  pageAccess: PageAccess,
+  input: BidiInputChannel | undefined,
+  actions: InputSource[],
+  synthetic: SyntheticInputOptions,
+): Promise<string | undefined> {
   const url = await requireSameSite(TOOL, tab.tabId, tab.host, pageAccess);
-  await performInput(input, tab.tabId, url, actions);
+  try {
+    await performInput(input, tab.tabId, url, actions);
+    return undefined;
+  } catch (error) {
+    if (!(error instanceof BidiUnavailableError)) throw error;
+    await runSyntheticInput(tab, pageAccess, synthetic);
+    return fallbackWarning(error.message);
+  }
 }
 
 export async function sendAndReport(
@@ -117,11 +151,12 @@ export async function sendAndReport(
   pageAccess: PageAccess,
   input: BidiInputChannel | undefined,
   actions: InputSource[],
+  synthetic: SyntheticInputOptions,
   text: string,
 ): Promise<PointerOutcome> {
-  await send(tab, pageAccess, input, actions);
+  const warning = await send(tab, pageAccess, input, actions, synthetic);
   const after = await afterInput(tab);
-  return { text: after.ok ? text : `${text}\n${after.note}` };
+  return { text: lines(text, warning, after.ok ? undefined : after.note) };
 }
 
 function delay(ms: number): Promise<void> {
@@ -147,10 +182,12 @@ async function scroll(
   const point = framePoint(tab, args.coordinate);
   const actions = built(scrollActions({ point, direction: args.direction, amount: args.amount }));
   const activated = await activateForWheel(tab.tabId);
-  await send(tab, pageAccess, input, actions);
+  const synthetic: SyntheticInputOptions = { kind: 'scroll', point, ...scrollDelta(args.direction, args.amount) };
+  const warning = await send(tab, pageAccess, input, actions, synthetic);
   await delay(SCROLL_SETTLE_MS);
-  let text = `Scrolled ${args.direction} by ${args.amount} ticks at ${describeCoordinate(args.coordinate)}`;
-  if (activated) text += ` ${BACKGROUND_SCROLL_NOTE}`;
+  let summary = `Scrolled ${args.direction} by ${args.amount} ticks at ${describeCoordinate(args.coordinate)}`;
+  if (activated) summary += ` ${BACKGROUND_SCROLL_NOTE}`;
+  const text = lines(summary, warning);
   const after = await afterInput(tab);
   if (!after.ok) return { text: `${text}\n${after.note}` };
   // The screenshot is checked against the host approved for this call, so another allowed site gets a note instead.
@@ -174,21 +211,32 @@ export async function pointerAction(
     case 'hover': {
       const point = await targetPoint(tab, args.target, pageAccess);
       const where = 'ref' in args.target ? `over element ${args.target.ref}` : `at ${describeCoordinate(args.target.coordinate)}`;
-      return sendAndReport(tab, pageAccess, input, built(hoverActions(point)), `Hovered ${where}`);
+      const synthetic: SyntheticInputOptions = { kind: 'hover', point, ...refOf(args.target) };
+      return sendAndReport(tab, pageAccess, input, built(hoverActions(point)), synthetic, `Hovered ${where}`);
     }
     case 'left_click_drag': {
-      const actions = built(dragActions(framePoint(tab, args.start), framePoint(tab, args.end)));
+      const start = framePoint(tab, args.start);
+      const end = framePoint(tab, args.end);
       const text = `Dragged from ${describeCoordinate(args.start)} to ${describeCoordinate(args.end)}`;
-      return sendAndReport(tab, pageAccess, input, actions, text);
+      return sendAndReport(tab, pageAccess, input, built(dragActions(start, end)), { kind: 'drag', start, end }, text);
     }
     case 'scroll':
       return scroll(tab, pageAccess, input, args);
     default: {
       const { button, clickCount, verb } = CLICKS[args.action];
       const point = await targetPoint(tab, args.target, pageAccess);
-      const actions = built(clickActions({ point, button, clickCount, modifiers: args.modifiers ?? '' }));
+      const modifiers = args.modifiers ?? '';
+      const actions = built(clickActions({ point, button, clickCount, modifiers }));
+      const synthetic: SyntheticInputOptions = {
+        kind: 'click',
+        point,
+        ...refOf(args.target),
+        button,
+        clickCount,
+        modifiers: modifierFlags(built(parseModifiers(modifiers))),
+      };
       const where = 'ref' in args.target ? `on element ${args.target.ref}` : `at ${describeCoordinate(args.target.coordinate)}`;
-      return sendAndReport(tab, pageAccess, input, actions, `${verb} ${where}`);
+      return sendAndReport(tab, pageAccess, input, actions, synthetic, `${verb} ${where}`);
     }
   }
 }

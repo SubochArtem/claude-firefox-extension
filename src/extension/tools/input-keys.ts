@@ -21,8 +21,8 @@ export const KEY_VALUES = {
   INSERT: '',
 } as const;
 
-const F1_CODEPOINT = 0xe031;
-const FUNCTION_KEY_COUNT = 12;
+export const F1_CODEPOINT = 0xe031;
+export const FUNCTION_KEY_COUNT = 12;
 
 const MODIFIERS: Readonly<Record<string, string>> = {
   ctrl: KEY_VALUES.CONTROL,
