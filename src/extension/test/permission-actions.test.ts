@@ -80,6 +80,11 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('read_console_messages', undefined)).toBe('read_console_messages');
   });
 
+  it('maps read_network_requests to read_network_requests', () => {
+    expect(permissionActionForTool('read_network_requests', { tabId: 1, urlPattern: '/api/' })).toBe('read_network_requests');
+    expect(permissionActionForTool('read_network_requests', undefined)).toBe('read_network_requests');
+  });
+
   it.each([undefined, null, 'url', 42, ['https://example.com']])('treats non-object args %j as empty', (args) => {
     expect(permissionActionForTool('navigate', args)).toBe('navigate');
     expect(permissionActionForTool('tabs_create', args)).toBeUndefined();

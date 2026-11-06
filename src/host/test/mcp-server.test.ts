@@ -85,7 +85,7 @@ describe('MCP server process', () => {
   it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text', 'find', 'form_input', 'resize_window', 'javascript_tool', 'read_console_messages']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text', 'find', 'form_input', 'resize_window', 'javascript_tool', 'read_console_messages', 'read_network_requests']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
   });

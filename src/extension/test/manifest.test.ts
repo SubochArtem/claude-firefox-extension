@@ -23,6 +23,10 @@ describe('manifest', () => {
     expect(manifest.permissions).toContain('cookies');
   });
 
+  it('declares the webRequest permission that read_network_requests needs', () => {
+    expect(manifest.permissions).toContain('webRequest');
+  });
+
   it('points the options page at the built options page', () => {
     expect(manifest.options_ui).toEqual({ page: 'options/options.html' });
   });

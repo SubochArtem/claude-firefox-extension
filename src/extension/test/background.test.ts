@@ -15,6 +15,12 @@ let onStartup: ReturnType<typeof listenerList<() => void>>;
 let onCommitted: { listeners: { listener: unknown; filter: unknown }[] };
 let onTabRemoved: ReturnType<typeof listenerList<(tabId: number) => void>>;
 let getRegisteredContentScripts: ReturnType<typeof vi.fn>;
+let webRequest: Record<'onBeforeRequest' | 'onCompleted' | 'onErrorOccurred', { listeners: { listener: unknown; filter: unknown }[] }>;
+
+function filteredEvent() {
+  const listeners: { listener: unknown; filter: unknown }[] = [];
+  return { listeners, addListener: (listener: unknown, filter: unknown) => listeners.push({ listener, filter }) };
+}
 
 beforeEach(async () => {
   connect.mockReset();
@@ -24,6 +30,7 @@ beforeEach(async () => {
   onTabRemoved = listenerList();
   onCommitted = { listeners: [] };
   getRegisteredContentScripts = vi.fn(async () => []);
+  webRequest = { onBeforeRequest: filteredEvent(), onCompleted: filteredEvent(), onErrorOccurred: filteredEvent() };
   vi.stubGlobal('browser', {
     runtime: {
       onInstalled: listenerList().event,
@@ -38,6 +45,7 @@ beforeEach(async () => {
     tabs: { onRemoved: onTabRemoved.event },
     storage: { session: { get: async () => ({}) } },
     scripting: { getRegisteredContentScripts },
+    webRequest,
   });
   vi.resetModules();
   await import('../background');
@@ -52,10 +60,23 @@ describe('background script', () => {
     expect(onStartup.listeners).toEqual([connect]);
   });
 
-  it('registers console tracking on http(s) commits and tab removal', async () => {
+  it('registers console and network tracking on http(s) commits and tab removal', async () => {
     const { handleConsoleCommit, handleConsoleTabRemoved } = await import('../tools/console-tracking');
-    expect(onCommitted.listeners).toEqual([{ listener: handleConsoleCommit, filter: { url: [{ schemes: ['http', 'https'] }] } }]);
-    expect(onTabRemoved.listeners).toEqual([handleConsoleTabRemoved]);
+    const { handleNetworkCommit, handleNetworkTabRemoved } = await import('../tools/network-tracking');
+    const filter = { url: [{ schemes: ['http', 'https'] }] };
+    expect(onCommitted.listeners).toEqual([
+      { listener: handleConsoleCommit, filter },
+      { listener: handleNetworkCommit, filter },
+    ]);
+    expect(onTabRemoved.listeners).toEqual([handleConsoleTabRemoved, handleNetworkTabRemoved]);
+  });
+
+  it('registers the network request listeners for all urls', async () => {
+    const { handleRequestStart, handleRequestCompleted, handleRequestError } = await import('../tools/network-tracking');
+    const filter = { urls: ['<all_urls>'] };
+    expect(webRequest.onBeforeRequest.listeners).toEqual([{ listener: handleRequestStart, filter }]);
+    expect(webRequest.onCompleted.listeners).toEqual([{ listener: handleRequestCompleted, filter }]);
+    expect(webRequest.onErrorOccurred.listeners).toEqual([{ listener: handleRequestError, filter }]);
   });
 
   it('reconciles the console capture registration on every start', async () => {
