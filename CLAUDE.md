@@ -120,6 +120,7 @@ src/                   npm package root; every command is run from here
       options-view.ts  pure rows for the permission list, saved API key status (last 4 characters only)
       options-messages.ts  background handler for revoke requests from the options page
     sidebar/           sidebar chat
+      markdown.ts      Markdown renderer for chat messages built with createElement/textContent only: paragraphs, headings, emphasis, code spans and fences (unclosed fence renders as code), lists with one nested level, blockquotes, rules, http(s)/mailto links and bare URLs, anything else as literal text
       sidebar-messages.ts  background handler for the sidebar's tool calls: sender check (sidebar page only), tool registry with the popup prompt and the native port's BiDi channels, results as text and image blocks
     page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
