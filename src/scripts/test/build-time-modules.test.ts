@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { build } from 'esbuild';
@@ -59,6 +59,24 @@ describe('buildTimeModules', () => {
     const code = await bundle(entry, [module]);
     expect(code).not.toMatch(/repeat|map\(/);
     expect(await importCode(code)).toMatchObject({ list: [2, 4], label: 'xxx' });
+  });
+
+  it('matches a module listed through a symlinked directory', async (context) => {
+    const dir = await tempDir();
+    const real = join(dir, 'real');
+    await mkdir(real);
+    const linked = join(dir, 'linked');
+    try {
+      await symlink(real, linked, 'junction');
+    } catch {
+      context.skip();
+    }
+    await writeFile(join(real, 'values.ts'), 'export const list = [1, 2].map((n) => n * 2);\n');
+    const entry = join(real, 'entry.ts');
+    await writeFile(entry, 'export { list } from "./values";\n');
+    const code = await bundle(entry, [join(linked, 'values.ts')]);
+    expect(code).not.toMatch(/map\(/);
+    expect(await importCode(code)).toMatchObject({ list: [2, 4] });
   });
 
   it('refuses exports that are not plain JSON data', async () => {

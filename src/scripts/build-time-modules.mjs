@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import { isDeepStrictEqual } from 'node:util';
 import { build } from 'esbuild';
 
@@ -17,22 +18,32 @@ async function evaluate(file) {
   );
 }
 
+/** @param {string} file */
+function realPath(file) {
+  try {
+    return realpathSync(file);
+  } catch {
+    return file;
+  }
+}
+
 /** @param {unknown} value */
 const isJsonData = (value) => value !== undefined && isDeepStrictEqual(JSON.parse(JSON.stringify(value) ?? 'null'), value);
 
 /**
  * esbuild plugin that runs the listed modules in Node at build time and replaces each with its
  * exports as JSON literals, so their dependencies are not bundled. Every export must be plain JSON data.
+ * Paths are compared after resolving symlinks, since esbuild reports real paths (macOS /var -> /private/var).
  * @param {string[]} files absolute paths of the modules
  * @returns {import('esbuild').Plugin}
  */
 export function buildTimeModules(files) {
-  const listed = new Set(files);
+  const listed = new Set(files.map(realPath));
   return {
     name: 'build-time-modules',
     setup(pluginBuild) {
       pluginBuild.onLoad({ filter: /\.[cm]?[jt]s$/ }, async (args) => {
-        if (!listed.has(args.path)) return undefined;
+        if (!listed.has(args.path) && !listed.has(realPath(args.path))) return undefined;
         const exports = await evaluate(args.path);
         const lines = [];
         for (const [name, value] of Object.entries(exports)) {
