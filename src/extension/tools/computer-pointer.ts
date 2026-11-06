@@ -30,21 +30,21 @@ export function inputPageChangedMessage(target: string): PageAccess['pageChanged
     `Cannot ${target} tab ${tabId}: the page navigated away from ${host} to another site, so no input was sent. Take a new screenshot of the tab before trying again; a page on another site needs its own permission.`;
 }
 
-function access(action: PageAccess['action'], label: ActionLabel): PageAccess {
+export function inputAccess(action: PageAccess['action'], label: ActionLabel): PageAccess {
   return { action, label, pageChanged: inputPageChangedMessage(label.target) };
 }
 
-const CLICK_ACCESS = access('click', { verb: 'click', target: 'click in' });
+const CLICK_ACCESS = inputAccess('click', { verb: 'click', target: 'click in' });
 
 const ACCESS: Record<PointerArgs['action'], PageAccess> = {
   left_click: CLICK_ACCESS,
   right_click: CLICK_ACCESS,
   double_click: CLICK_ACCESS,
   triple_click: CLICK_ACCESS,
-  hover: access('read_page_content', { verb: 'hover', target: 'hover in' }),
-  left_click_drag: access('click', { verb: 'drag', target: 'drag in' }),
-  scroll: access('read_page_content', { verb: 'scroll', target: 'scroll' }),
-  scroll_to: access('read_page_content', { verb: 'scroll to an element', target: 'scroll' }),
+  hover: inputAccess('read_page_content', { verb: 'hover', target: 'hover in' }),
+  left_click_drag: inputAccess('click', { verb: 'drag', target: 'drag in' }),
+  scroll: inputAccess('read_page_content', { verb: 'scroll', target: 'scroll' }),
+  scroll_to: inputAccess('read_page_content', { verb: 'scroll to an element', target: 'scroll' }),
 };
 
 const CLICKS: Record<ClickAction, { button: MouseButton; clickCount: number; verb: string }> = {
@@ -91,7 +91,7 @@ function describeCoordinate([x, y]: Coordinate): string {
   return `(${x}, ${y})`;
 }
 
-function built(result: ParseResult<InputSource[]>): InputSource[] {
+export function built(result: ParseResult<InputSource[]>): InputSource[] {
   if (!result.ok) throw new ToolError(`Invalid computer arguments: ${result.error}`);
   return result.value;
 }
@@ -99,7 +99,7 @@ function built(result: ParseResult<InputSource[]>): InputSource[] {
 type AfterInput = { ok: true; tab: OpenTab } | { ok: false; note: string };
 
 // A click may navigate the tab, so nothing from the page is attached unless it is still on an allowed site.
-async function afterInput(tab: OpenTab): Promise<AfterInput> {
+export async function afterInput(tab: OpenTab): Promise<AfterInput> {
   const current = await browser.tabs.get(tab.tabId).catch(() => undefined);
   if (!current) return { ok: false, note: `Tab ${tab.tabId} was closed after the input.` };
   const landed = await landedSite(current.url, tab.host);
@@ -112,7 +112,7 @@ async function send(tab: OpenTab, pageAccess: PageAccess, input: BidiInputChanne
   await performInput(input, tab.tabId, url, actions);
 }
 
-async function sendAndReport(
+export async function sendAndReport(
   tab: OpenTab,
   pageAccess: PageAccess,
   input: BidiInputChannel | undefined,

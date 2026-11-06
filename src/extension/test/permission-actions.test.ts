@@ -36,6 +36,13 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('computer', { action, coordinate: [1, 2] })).toBe('click');
   });
 
+  it.each([
+    { action: 'type', text: 'hello' },
+    { action: 'key', text: 'Enter', repeat: 2 },
+  ])('maps the computer $action action to type', (args) => {
+    expect(permissionActionForTool('computer', args)).toBe('type');
+  });
+
   it('needs no permission for the computer wait action', () => {
     expect(permissionActionForTool('computer', { action: 'wait', duration: 1 })).toBeUndefined();
   });
@@ -71,7 +78,7 @@ describe('permissionActionForTool', () => {
 
   it.each([
     ['computer', { action: 'click' }],
-    ['computer', { action: 'type' }],
+    ['computer', { action: 'Type' }],
     ['computer', {}],
     ['tabs_context', {}],
     ['unknown_tool', {}],
