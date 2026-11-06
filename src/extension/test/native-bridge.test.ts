@@ -410,6 +410,50 @@ describe('bidi input channel', () => {
   });
 });
 
+describe('bidi evaluate channel', () => {
+  async function bridgeWithChannels() {
+    const channels: import('../tools/bidi-evaluate').BidiEvaluateChannel[] = [];
+    vi.resetModules();
+    vi.doMock('../tools/bidi-evaluate', async (importOriginal) => {
+      const original = await importOriginal<typeof import('../tools/bidi-evaluate')>();
+      return {
+        ...original,
+        createBidiEvaluateChannel: (send: Parameters<typeof original.createBidiEvaluateChannel>[0]) => {
+          const channel = original.createBidiEvaluateChannel(send);
+          channels.push(channel);
+          return channel;
+        },
+      };
+    });
+    bridge = await import('../native-bridge');
+    onTestFinished(() => {
+      vi.doUnmock('../tools/bidi-evaluate');
+    });
+    return channels;
+  }
+
+  const MARKER = { name: '__claudeTabMarker_0123456789abcdef', value: 'd'.repeat(32) };
+
+  it('sends evaluate requests over the port and routes the responses back', async () => {
+    const channels = await bridgeWithChannels();
+    const port = connectAndPong();
+    const result = channels[0]?.request({ marker: MARKER, url: 'https://a.example/', code: '1 + 1' });
+    const sent = port.postMessage.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(sent).toEqual({ type: 'bidi_evaluate_request', requestId: expect.any(String), marker: MARKER, url: 'https://a.example/', code: '1 + 1' });
+    port.emitMessage({ type: 'bidi_evaluate_response', requestId: sent['requestId'], ok: true, value: '2' });
+    await expect(result).resolves.toEqual({ ok: true, value: '2' });
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  it('fails pending evaluate requests when the port disconnects', async () => {
+    const channels = await bridgeWithChannels();
+    const port = connectAndPong();
+    const result = channels[0]?.request({ marker: MARKER, url: 'https://a.example/', code: '1' });
+    port.emitDisconnect();
+    await expect(result).resolves.toEqual({ ok: false, error: 'The native host disconnected before the script finished' });
+  });
+});
+
 describe('stale ports', () => {
   it('ignores messages and disconnects from a port that was replaced', async () => {
     bridge.connect();

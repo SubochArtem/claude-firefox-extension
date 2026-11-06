@@ -11,7 +11,9 @@ import {
   type BridgeInfo,
 } from './bridge-info';
 import { BidiError, BidiUnavailableError, bidiPort } from './bidi-client';
-import { createSerialQueue, runBidiInput } from './bidi-input';
+import { runBidiEvaluate } from './bidi-evaluate';
+import { runBidiInput } from './bidi-input';
+import { createSerialQueue } from './bidi-session';
 import {
   clientProof,
   createNonce,
@@ -27,6 +29,9 @@ import { MAX_LINE_BYTES, readJsonLines, writeJsonLine } from './json-lines';
 import { listen, listenWithRetry } from './listen';
 import { readNativeMessages, writeNativeMessage } from './native-messaging';
 import {
+  BIDI_EVALUATE_TIMEOUT_MS,
+  type BidiEvaluateRequest,
+  type BidiEvaluateResponse,
   type BidiInputRequest,
   type BidiInputResponse,
   denyPermission,
@@ -43,13 +48,17 @@ import {
   type ToolRequest,
   type ToolResponse,
 } from './protocol';
+import { formatRemoteValue } from './remote-value-format';
 import { bridgeSocketPath, prepareBridgeSocketDir, restrictBridgeSocket } from './socket-path';
 
 const LOG = '[native-host]';
 const SHUTDOWN_GRACE_MS = 1000;
-// How long an exit waits for a running BiDi input request to end its session.
+// How long an exit waits for a running BiDi request to end its session.
 const BIDI_SHUTDOWN_WAIT_MS = 3000;
-const MAX_BIDI_INPUT_QUEUE = 8;
+const MAX_BIDI_QUEUE = 8;
+// An evaluate request may take up to about 60 s once started (connection, session, context lookup,
+// the 30 s script and cleanup), so it waits in the queue only for what is left of the extension's wait.
+const BIDI_EVALUATE_QUEUE_WAIT_MS = BIDI_EVALUATE_TIMEOUT_MS - 60_000;
 // Handshake lines are tiny; without this cap an unauthenticated peer could make the host buffer up to
 // the 64 MB line limit that only authenticated clients need.
 const HANDSHAKE_MAX_LINE_BYTES = 4 * 1024;
@@ -81,11 +90,11 @@ const pending = new Map<string, PendingRequest>();
 // Permission requests from the extension by requestId, with the client asked to answer them.
 const permissionRequests = new Map<string, Client>();
 const unauthenticated = new Set<Socket>();
-// Firefox allows a single WebDriver BiDi session, so input requests run one at a time. The extension
-// gives up after BIDI_INPUT_TIMEOUT_MS, so a request that waited longer is skipped.
-const bidiQueue = createSerialQueue({ maxLength: MAX_BIDI_INPUT_QUEUE, maxWaitMs: BIDI_INPUT_TIMEOUT_MS });
+// Firefox allows a single WebDriver BiDi session, so input and evaluate requests run one at a time.
+// The extension gives up after BIDI_INPUT_TIMEOUT_MS, so an input request that waited longer is skipped.
+const bidiQueue = createSerialQueue({ maxLength: MAX_BIDI_QUEUE, maxWaitMs: BIDI_INPUT_TIMEOUT_MS });
 const bidiShutdown = new AbortController();
-let runningBidiInput: Promise<void> | undefined;
+let runningBidi: Promise<void> | undefined;
 let nextClientId = 1;
 let shuttingDown = false;
 // The extension takes a pong as a working connection, so a host that is about to step aside for
@@ -278,44 +287,69 @@ function handleConnection(socket: Socket): void {
   });
 }
 
+function runBidiTask<T>(task: () => Promise<T>, maxWaitMs?: number): Promise<T> {
+  return bidiQueue.run(async () => {
+    const run = task();
+    runningBidi = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    try {
+      return await run;
+    } finally {
+      runningBidi = undefined;
+    }
+  }, maxWaitMs);
+}
+
+function bidiFailure(error: unknown, label: string, requestId: string): { error: string; unavailable?: true } {
+  if (!(error instanceof BidiError)) console.error(`${LOG} bidi ${label} ${requestId} failed:`, error);
+  const text = error instanceof BidiError ? error.message : `WebDriver BiDi ${label} failed: ${String(error)}`;
+  return { error: text, ...(error instanceof BidiUnavailableError ? { unavailable: true as const } : {}) };
+}
+
 async function performBidiInput(request: BidiInputRequest): Promise<BidiInputResponse> {
   const { requestId } = request;
   try {
-    await bidiQueue.run(async () => {
-      const run = runBidiInput(request, bidiPort(), undefined, bidiShutdown.signal);
-      runningBidiInput = run.then(
-        () => undefined,
-        () => undefined,
-      );
-      try {
-        await run;
-      } finally {
-        runningBidiInput = undefined;
-      }
-    });
+    await runBidiTask(() => runBidiInput(request, bidiPort(), undefined, bidiShutdown.signal));
     return { type: 'bidi_input_response', requestId, ok: true };
   } catch (error) {
-    if (!(error instanceof BidiError)) console.error(`${LOG} bidi input ${requestId} failed:`, error);
-    const text = error instanceof BidiError ? error.message : `WebDriver BiDi input failed: ${String(error)}`;
-    const unavailable = error instanceof BidiUnavailableError ? { unavailable: true as const } : {};
-    return { type: 'bidi_input_response', requestId, ok: false, error: text, ...unavailable };
+    return { type: 'bidi_input_response', requestId, ok: false, ...bidiFailure(error, 'input', requestId) };
   }
 }
 
-// A malformed input request that still names its id is answered with an error, so the extension does
+async function performBidiEvaluate(request: BidiEvaluateRequest): Promise<BidiEvaluateResponse> {
+  const { requestId } = request;
+  try {
+    const outcome = await runBidiTask(
+      () => runBidiEvaluate(request, bidiPort(), undefined, bidiShutdown.signal),
+      BIDI_EVALUATE_QUEUE_WAIT_MS,
+    );
+    if ('exception' in outcome) return { type: 'bidi_evaluate_response', requestId, ok: true, exception: outcome.exception };
+    return { type: 'bidi_evaluate_response', requestId, ok: true, value: formatRemoteValue(outcome.value) };
+  } catch (error) {
+    return { type: 'bidi_evaluate_response', requestId, ok: false, ...bidiFailure(error, 'evaluate', requestId) };
+  }
+}
+
+// A malformed BiDi request that still names its id is answered with an error, so the extension does
 // not wait for its timeout.
-function rejectInvalidBidiInput(message: unknown): void {
-  if (!isRecord(message) || message['type'] !== 'bidi_input_request') return;
+function rejectInvalidBidiRequest(message: unknown): void {
+  if (!isRecord(message)) return;
   const requestId = message['requestId'];
   if (typeof requestId !== 'string' || requestId.length === 0 || requestId.length > MAX_PERMISSION_FIELD_LENGTH) return;
-  sendToExtension({ type: 'bidi_input_response', requestId, ok: false, error: 'The extension sent an invalid input request' });
+  if (message['type'] === 'bidi_input_request') {
+    sendToExtension({ type: 'bidi_input_response', requestId, ok: false, error: 'The extension sent an invalid input request' });
+  } else if (message['type'] === 'bidi_evaluate_request') {
+    sendToExtension({ type: 'bidi_evaluate_response', requestId, ok: false, error: 'The extension sent an invalid evaluate request' });
+  }
 }
 
 function handleExtensionMessage(message: unknown): void {
   const parsed = parseExtensionMessage(message);
   if (!parsed) {
     console.error(`${LOG} extension sent an invalid message`);
-    rejectInvalidBidiInput(message);
+    rejectInvalidBidiRequest(message);
     return;
   }
   if (parsed.type === 'ping') {
@@ -328,6 +362,10 @@ function handleExtensionMessage(message: unknown): void {
   }
   if (parsed.type === 'bidi_input_request') {
     void performBidiInput(parsed).then(sendToExtension);
+    return;
+  }
+  if (parsed.type === 'bidi_evaluate_request') {
+    void performBidiEvaluate(parsed).then(sendToExtension);
     return;
   }
   const entry = pending.get(parsed.id);
@@ -363,8 +401,8 @@ function ownsEndpoint(server: Server, socketPath: string | undefined): boolean {
 
 // A BiDi session left open blocks every later session until Firefox restarts, so an exit waits for
 // the running request's cleanup, capped so a hung Firefox cannot keep the host alive.
-function exitAfterBidiInput(code: number): void {
-  const running = runningBidiInput;
+function exitAfterBidiRequest(code: number): void {
+  const running = runningBidi;
   if (!running) process.exit(code);
   const cap = new Promise<void>((resolve) => setTimeout(resolve, BIDI_SHUTDOWN_WAIT_MS).unref());
   void Promise.race([running, cap]).then(() => process.exit(code));
@@ -383,11 +421,11 @@ function shutdown(server: Server, socketPath: string | undefined, reason: string
   for (const client of clients.values()) client.socket.end();
   for (const socket of unauthenticated) socket.destroy();
   bidiShutdown.abort();
-  setTimeout(() => exitAfterBidiInput(0), SHUTDOWN_GRACE_MS).unref();
+  setTimeout(() => exitAfterBidiRequest(0), SHUTDOWN_GRACE_MS).unref();
   // libuv unlinks the listening path on close without checking what it points to. If another
   // host has replaced the socket file, skip close() and let the grace timer end the process.
-  if (ownsEndpoint(server, socketPath)) server.close(() => exitAfterBidiInput(0));
-  else if (!server.listening) exitAfterBidiInput(0);
+  if (ownsEndpoint(server, socketPath)) server.close(() => exitAfterBidiRequest(0));
+  else if (!server.listening) exitAfterBidiRequest(0);
 }
 
 export async function runNativeHost(): Promise<void> {

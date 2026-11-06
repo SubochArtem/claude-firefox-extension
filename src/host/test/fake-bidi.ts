@@ -36,6 +36,8 @@ export interface FakeBidi {
   ) => void;
   // Messages sent to every new connection right after the handshake, e.g. stray events.
   greeting: unknown[];
+  // Replies to script.evaluate calls other than the marker check; by default they return false.
+  script?: (params: Record<string, unknown>, connection: number) => BidiReply | Promise<BidiReply>;
   openConnections: () => number;
 }
 
@@ -83,7 +85,12 @@ function readFrames(socket: Socket, onFrame: (opcode: number, payload: Buffer) =
   });
 }
 
-function defaultReply(fake: FakeBidi, method: string, params: Record<string, unknown>): BidiReply {
+function defaultReply(
+  fake: FakeBidi,
+  method: string,
+  params: Record<string, unknown>,
+  connection: number,
+): BidiReply | Promise<BidiReply> {
   switch (method) {
     case 'session.new':
       return { result: { sessionId: 'session-1', capabilities: {} } };
@@ -97,6 +104,7 @@ function defaultReply(fake: FakeBidi, method: string, params: Record<string, unk
       if (!context) return { error: 'no such frame', message: target.context };
       if (context.hangs) return HANG;
       const match = /^window\[("[^"]*")\] === ("[^"]*")$/.exec(String(params['expression']));
+      if (!match && fake.script) return fake.script(params, connection);
       const value = match?.[2] !== undefined ? (JSON.parse(match[2]) as string) : undefined;
       return {
         result: { type: 'success', result: { type: 'boolean', value: context.marker !== undefined && context.marker === value }, realm: 'r' },
@@ -157,7 +165,7 @@ export async function startFakeBidi(): Promise<FakeBidi> {
       };
       fake.commands.push({ connection, method, params });
       const handler = handlers.get(method);
-      void Promise.resolve(handler ? handler(params, connection) : defaultReply(fake, method, params)).then((reply) => {
+      void Promise.resolve(handler ? handler(params, connection) : defaultReply(fake, method, params, connection)).then((reply) => {
         if (reply === HANG) return;
         if ('result' in reply) send({ type: 'success', id, result: reply.result });
         else send({ type: 'error', id, error: reply.error, message: reply.message });

@@ -129,7 +129,7 @@ describe('native host bidi input requests', () => {
         type: 'bidi_input_response',
         requestId,
         ok: false,
-        error: expect.stringMatching(/^Too many input requests are waiting for WebDriver BiDi/),
+        error: expect.stringMatching(/^Too many requests are waiting for WebDriver BiDi/),
       })),
     );
     release?.();
@@ -153,5 +153,104 @@ describe('native host bidi input requests', () => {
     expect(Date.now() - started).toBeLessThan(3_500);
     expect(fake.methods().slice(-3)).toEqual(['input.performActions', 'input.releaseActions', 'session.end']);
     expect(fake.commands.filter((command) => command.method === 'session.new')).toHaveLength(1);
+  });
+});
+
+describe('native host bidi evaluate requests', () => {
+  function evaluateRequest(requestId: string, code: string): Record<string, unknown> {
+    return { type: 'bidi_evaluate_request', requestId, marker: MARKER, url: URL_A, code };
+  }
+
+  function evaluateResponses(host: FakeExtension): unknown[] {
+    return host.received.filter((message) => (message as { type: string }).type === 'bidi_evaluate_response');
+  }
+
+  it('answers with the formatted value, redactions applied', async () => {
+    const fake = await startFakeBidi();
+    fake.contexts.push({ context: 'ctx-a', url: URL_A, marker: MARKER.value });
+    fake.script = () => ({
+      result: {
+        type: 'success',
+        result: { type: 'object', value: [['title', { type: 'string', value: 'A' }], ['token', { type: 'string', value: 't' }]] },
+        realm: 'r',
+      },
+    });
+    const host = await hostWithPort(String(fake.port));
+    host.send(evaluateRequest('e1', '({title: document.title, token})'));
+    await waitFor(() =>
+      expect(evaluateResponses(host)).toEqual([
+        { type: 'bidi_evaluate_response', requestId: 'e1', ok: true, value: '{title: "A", token: [REDACTED]}' },
+      ]),
+    );
+    expect(fake.methods().at(-1)).toBe('session.end');
+  });
+
+  it('answers with the exception text', async () => {
+    const fake = await startFakeBidi();
+    fake.contexts.push({ context: 'ctx-a', url: URL_A, marker: MARKER.value });
+    fake.script = () => ({
+      result: { type: 'exception', exceptionDetails: { text: 'Error: boom', exception: { type: 'error' } }, realm: 'r' },
+    });
+    const host = await hostWithPort(String(fake.port));
+    host.send(evaluateRequest('e1', 'boom()'));
+    await waitFor(() =>
+      expect(evaluateResponses(host)).toEqual([{ type: 'bidi_evaluate_response', requestId: 'e1', ok: true, exception: 'Error: boom' }]),
+    );
+  });
+
+  it('answers with unavailable when Firefox is not listening', async () => {
+    const port = await closedPort();
+    const host = await hostWithPort(String(port));
+    host.send(evaluateRequest('e1', '1'));
+    await waitFor(() => expect(evaluateResponses(host)).toHaveLength(1));
+    expect(evaluateResponses(host)[0]).toEqual({
+      type: 'bidi_evaluate_response',
+      requestId: 'e1',
+      ok: false,
+      error: expect.stringContaining(`--remote-debugging-port=${port}`),
+      unavailable: true,
+    });
+  });
+
+  it('answers a malformed request that names its id', async () => {
+    const fake = await startFakeBidi();
+    const host = await hostWithPort(String(fake.port));
+    host.send({ ...evaluateRequest('bad', ''), code: 5 });
+    await waitFor(() =>
+      expect(evaluateResponses(host)).toEqual([
+        { type: 'bidi_evaluate_response', requestId: 'bad', ok: false, error: 'The extension sent an invalid evaluate request' },
+      ]),
+    );
+    expect(fake.commands).toEqual([]);
+  });
+
+  it('runs evaluate and input requests one session at a time', async () => {
+    const fake = await startFakeBidi();
+    fake.contexts.push({ context: 'ctx-a', url: URL_A, marker: MARKER.value });
+    fake.script = () => ({ result: { type: 'success', result: { type: 'number', value: 1 }, realm: 'r' } });
+    const host = await hostWithPort(String(fake.port));
+    host.send(evaluateRequest('e1', '1'));
+    host.send(inputRequest('b1'));
+    await waitFor(() => expect(evaluateResponses(host)).toHaveLength(1));
+    await waitFor(() => expect(bidiResponses(host)).toHaveLength(1));
+    const sessions = fake.commands.filter((command) => command.method === 'session.new' || command.method === 'session.end');
+    expect(sessions.map((command) => [command.method, command.connection])).toEqual([
+      ['session.new', 1],
+      ['session.end', 1],
+      ['session.new', 2],
+      ['session.end', 2],
+    ]);
+  });
+
+  it('ends the BiDi session before exiting when the extension disconnects during a script', async () => {
+    const fake = await startFakeBidi();
+    fake.contexts.push({ context: 'ctx-a', url: URL_A, marker: MARKER.value });
+    fake.script = () => HANG;
+    const host = await hostWithPort(String(fake.port));
+    host.send(evaluateRequest('e1', 'while (true) {}'));
+    await waitFor(() => expect(fake.commands.filter((command) => command.method === 'script.evaluate')).toHaveLength(2));
+    host.child.stdin.end();
+    expect(await host.exited).toBe(0);
+    expect(fake.methods().at(-1)).toBe('session.end');
   });
 });

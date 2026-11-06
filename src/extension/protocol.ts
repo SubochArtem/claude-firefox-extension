@@ -66,11 +66,47 @@ export type BidiInputResponse =
   // unavailable: WebDriver BiDi itself cannot be used (no listener, no session, the tab is not visible to it).
   | { type: 'bidi_input_response'; requestId: string; ok: false; error: string; unavailable?: true };
 
-export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest;
-export type HostToExtensionMessage = { type: 'pong' } | ToolRequest | PermissionResponse | BidiInputResponse;
+// Must match BIDI_EVALUATE_TIMEOUT_MS in host/protocol.ts.
+export const BIDI_EVALUATE_TIMEOUT_MS = 90_000;
+
+// Asks the native host to run `code` with WebDriver BiDi script.evaluate in the marked tab's main realm.
+export interface BidiEvaluateRequest {
+  type: 'bidi_evaluate_request';
+  requestId: string;
+  marker: TabMarker;
+  url: string;
+  code: string;
+}
+
+// value: the result formatted as text by the host; exception: the uncaught exception with its stack.
+export type BidiEvaluateResponse =
+  | { type: 'bidi_evaluate_response'; requestId: string; ok: true; value: string }
+  | { type: 'bidi_evaluate_response'; requestId: string; ok: true; exception: string }
+  | { type: 'bidi_evaluate_response'; requestId: string; ok: false; error: string; unavailable?: true };
+
+export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest | BidiEvaluateRequest;
+export type HostToExtensionMessage =
+  | { type: 'pong' }
+  | ToolRequest
+  | PermissionResponse
+  | BidiInputResponse
+  | BidiEvaluateResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function parseEvaluateResponse(value: Record<string, unknown>): BidiEvaluateResponse | undefined {
+  const { requestId, ok, error } = value;
+  if (typeof requestId !== 'string') return undefined;
+  const type = 'bidi_evaluate_response';
+  if (ok === true && typeof value['value'] === 'string') return { type, requestId, ok, value: value['value'] };
+  if (ok === true && typeof value['exception'] === 'string') return { type, requestId, ok, exception: value['exception'] };
+  // A malformed reply still settles its request instead of leaving it to the timeout.
+  if (ok !== false || typeof error !== 'string') {
+    return { type, requestId, ok: false, error: 'The native host sent a malformed evaluate response' };
+  }
+  return { type, requestId, ok, error, ...(value['unavailable'] === true ? { unavailable: true as const } : {}) };
 }
 
 export function parseHostMessage(value: unknown): HostToExtensionMessage | undefined {
@@ -92,6 +128,7 @@ export function parseHostMessage(value: unknown): HostToExtensionMessage | undef
     const unavailable = value['unavailable'] === true ? { unavailable: true as const } : {};
     return { type: 'bidi_input_response', requestId, ok: false, error, ...unavailable };
   }
+  if (value['type'] === 'bidi_evaluate_response') return parseEvaluateResponse(value);
   if (value['type'] !== 'tool_request') return undefined;
   const { id, tool, args } = value;
   if (typeof id !== 'string' || typeof tool !== 'string' || !isRecord(args)) return undefined;
