@@ -160,22 +160,45 @@ describe('MCP server process', () => {
     ]);
   });
 
-  it('lists computer with the screenshot and zoom actions and optional tabId, region and scale', async () => {
+  it('lists computer with its actions and optional parameters', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
     const computer = tools.find((tool) => tool.name === 'computer');
     expect(computer?.inputSchema).toMatchObject({
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['screenshot', 'zoom'] },
+        action: {
+          type: 'string',
+          enum: [
+            'screenshot',
+            'zoom',
+            'left_click',
+            'right_click',
+            'double_click',
+            'triple_click',
+            'hover',
+            'left_click_drag',
+            'scroll',
+            'scroll_to',
+            'wait',
+          ],
+        },
         tabId: { type: 'integer' },
         region: { type: 'array', minItems: 4, maxItems: 4, items: { type: 'number' } },
         scale: { type: 'number', minimum: 0.1, maximum: 1 },
+        coordinate: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+        start_coordinate: { type: 'array', minItems: 2, maxItems: 2, items: { type: 'number' } },
+        ref: { type: 'string', pattern: '^ref_\\d+$' },
+        modifiers: { type: 'string' },
+        scroll_direction: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+        scroll_amount: { type: 'integer', minimum: 1, maximum: 10 },
+        duration: { type: 'number', exclusiveMinimum: 0, maximum: 10 },
       },
       required: ['action'],
     });
     expect(computer?.description).toMatch(/screenshot/);
     expect(computer?.description).toMatch(/zoom/);
+    expect(computer?.description).toMatch(/--remote-debugging-port/);
   });
 
   it('lists read_page with optional tabId, filter, depth, ref_id and max_chars', async () => {

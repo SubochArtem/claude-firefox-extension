@@ -2,6 +2,7 @@ import type { ApprovalPrompt } from '../permissions/approval';
 import type { ClientApprovals } from '../permissions/client-prompt';
 import { approvalPromptFor } from '../permissions/site-access';
 import type { ContentBlock, ToolRequest, ToolResponse } from '../protocol';
+import type { BidiInputChannel } from './bidi-input';
 import { computer } from './computer';
 import { findTool } from './find';
 import { formInputTool } from './form-input';
@@ -12,7 +13,7 @@ import { tabsClose, tabsCreate } from './tabs';
 import { tabsContext } from './tabs-context';
 import { ToolError } from './tool-error';
 
-type ToolHandler = (args: Record<string, unknown>, prompt: ApprovalPrompt) => Promise<ContentBlock[]>;
+type ToolHandler = (args: Record<string, unknown>, prompt: ApprovalPrompt, input?: BidiInputChannel) => Promise<ContentBlock[]>;
 
 const tools = new Map<string, ToolHandler>([
   ['tabs_context', tabsContext],
@@ -30,14 +31,18 @@ function errorResponse(id: string, text: string): ToolResponse {
   return { type: 'tool_response', id, error: { content: [{ type: 'text', text }] } };
 }
 
-export async function executeTool(request: ToolRequest, clientApprovals?: ClientApprovals): Promise<ToolResponse> {
+export async function executeTool(
+  request: ToolRequest,
+  clientApprovals?: ClientApprovals,
+  bidiInput?: BidiInputChannel,
+): Promise<ToolResponse> {
   const handler = tools.get(request.tool);
   if (!handler) return errorResponse(request.id, `Unknown tool: ${request.tool}`);
   try {
     const prompt = approvalPromptFor(
       clientApprovals && { viaClient: request.approvalViaClient === true, clientPrompt: clientApprovals.promptFor(request.id) },
     );
-    const content = await handler(request.args, prompt);
+    const content = await handler(request.args, prompt, bidiInput);
     return { type: 'tool_response', id: request.id, result: { content } };
   } catch (error) {
     if (error instanceof ToolError) return errorResponse(request.id, error.message);

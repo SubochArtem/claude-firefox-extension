@@ -2,8 +2,10 @@ import type { ApprovalPrompt } from '../permissions/approval';
 import { siteForUrl } from '../permissions/site';
 import { requireSiteAccess } from '../permissions/site-access';
 import type { ContentBlock } from '../protocol';
-import { parseComputerArgs, type ScreenshotArgs, type ZoomArgs } from './computer-input';
-import { CoordinateFrames } from './coordinate-frame';
+import type { BidiInputChannel } from './bidi-input';
+import { parseComputerArgs, type PointerArgs, type ScreenshotArgs, type WaitArgs, type ZoomArgs } from './computer-input';
+import { pointerAction } from './computer-pointer';
+import { screenshotFrames } from './coordinate-frame';
 import { type Size, screenshotSize, zoomOutputSize } from './screenshot-size';
 import {
   type ActionLabel,
@@ -28,8 +30,6 @@ const ZOOM_LABEL: ActionLabel = { verb: 'zoom', target: 'zoom into' };
 export function siteChangedMessage(target: string, tabId: number, host: string): string {
   return `Cannot ${target} tab ${tabId}: the tab navigated away from ${host} before the capture, so nothing was captured. Try again; a page on another site needs its own permission.`;
 }
-
-export const screenshotFrames = new CoordinateFrames();
 
 function forgetFrame(tabId: number): void {
   screenshotFrames.forget(tabId);
@@ -201,10 +201,9 @@ async function capture(
   }
 }
 
-async function screenshot(args: ScreenshotArgs, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
-  const { tabId, url, host } = await capturableTab(args.tabId, SCREENSHOT_LABEL, prompt);
+// The tab already passed the site gate for this call; host is the approved host.
+async function captureScreenshot({ tabId, url, host }: CapturableTab, scale: number): Promise<ContentBlock[]> {
   const viewport = await readViewport(SCREENSHOT_LABEL, tabId, url);
-  const scale = args.scale ?? 1;
   const { frame, output } = screenshotSize(viewport, scale);
 
   // tabs.captureTab renders the tab without activating it, unlike captureVisibleTab. Its scale is
@@ -223,6 +222,10 @@ async function screenshot(args: ScreenshotArgs, prompt: ApprovalPrompt): Promise
     { type: 'text', text },
     { type: 'image', data: base64, mimeType: 'image/jpeg' },
   ];
+}
+
+async function screenshot(args: ScreenshotArgs, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
+  return captureScreenshot(await capturableTab(args.tabId, SCREENSHOT_LABEL, prompt), args.scale ?? 1);
 }
 
 // Zoom keeps the last screenshot's coordinate frame, so later actions still use its coordinates.
@@ -255,8 +258,39 @@ async function zoom(args: ZoomArgs, prompt: ApprovalPrompt): Promise<ContentBloc
   ];
 }
 
-export async function computer(args: Record<string, unknown>, prompt: ApprovalPrompt): Promise<ContentBlock[]> {
+function waitText(seconds: number): string {
+  return `Waited for ${seconds} second${seconds === 1 ? '' : 's'}`;
+}
+
+async function wait(args: WaitArgs): Promise<ContentBlock[]> {
+  await new Promise((resolve) => setTimeout(resolve, args.duration * 1000));
+  return [{ type: 'text', text: waitText(args.duration) }];
+}
+
+// Scroll attaches a screenshot of the scrolled page, which also records a new coordinate frame.
+async function pointer(args: PointerArgs, prompt: ApprovalPrompt, input: BidiInputChannel | undefined): Promise<ContentBlock[]> {
+  const outcome = await pointerAction(args, prompt, input);
+  const text: ContentBlock = { type: 'text', text: outcome.text };
+  if (!outcome.screenshot) return [text];
+  return [text, ...(await captureScreenshot(outcome.screenshot, 1))];
+}
+
+export async function computer(
+  args: Record<string, unknown>,
+  prompt: ApprovalPrompt,
+  input?: BidiInputChannel,
+): Promise<ContentBlock[]> {
   const parsed = parseComputerArgs(args);
   if (!parsed.ok) throw new ToolError(`Invalid computer arguments: ${parsed.error}`);
-  return parsed.value.action === 'zoom' ? zoom(parsed.value, prompt) : screenshot(parsed.value, prompt);
+  const { value } = parsed;
+  switch (value.action) {
+    case 'screenshot':
+      return screenshot(value, prompt);
+    case 'zoom':
+      return zoom(value, prompt);
+    case 'wait':
+      return wait(value);
+    default:
+      return pointer(value, prompt, input);
+  }
 }

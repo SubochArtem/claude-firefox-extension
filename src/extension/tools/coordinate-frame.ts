@@ -107,3 +107,6 @@ export class CoordinateFrames {
     return { x: left, y: top, width: clampedRight - left, height: clampedBottom - top };
   }
 }
+
+// Frames of the last screenshot per tab, shared by the computer tool's actions.
+export const screenshotFrames = new CoordinateFrames();

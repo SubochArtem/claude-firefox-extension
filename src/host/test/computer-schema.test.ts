@@ -37,6 +37,40 @@ describe('computerInputSchema', () => {
     expect(computerInputSchema.shape.scale.description).toContain('full-resolution');
   });
 
+  it.each([
+    { action: 'left_click', coordinate: [10, 20.5] },
+    { action: 'right_click', ref: 'ref_3', tabId: 2 },
+    { action: 'double_click', coordinate: [1, 2], modifiers: 'ctrl+shift' },
+    { action: 'triple_click', ref: 'ref_1' },
+    { action: 'hover', coordinate: [0, 0] },
+    { action: 'left_click_drag', start_coordinate: [1, 2], coordinate: [3, 4] },
+    { action: 'scroll', coordinate: [5, 6], scroll_direction: 'down', scroll_amount: 10 },
+    { action: 'scroll_to', ref: 'ref_9' },
+    { action: 'wait', duration: 0.5 },
+  ])('accepts pointer and wait actions %j', (args) => {
+    expect(computerInputSchema.safeParse(args).success).toBe(true);
+  });
+
+  it.each([
+    { action: 'left_click', coordinate: [1] },
+    { action: 'left_click', coordinate: [1, '2'] },
+    { action: 'left_click', ref: 'button' },
+    { action: 'left_click_drag', start_coordinate: [1, 2, 3], coordinate: [3, 4] },
+    { action: 'scroll', coordinate: [1, 2], scroll_direction: 'sideways' },
+    { action: 'scroll', coordinate: [1, 2], scroll_direction: 'up', scroll_amount: 0 },
+    { action: 'scroll', coordinate: [1, 2], scroll_direction: 'up', scroll_amount: 11 },
+    { action: 'scroll', coordinate: [1, 2], scroll_direction: 'up', scroll_amount: 1.5 },
+    { action: 'wait', duration: 0 },
+    { action: 'wait', duration: 10.5 },
+  ])('rejects pointer and wait arguments %j', (args) => {
+    expect(computerInputSchema.safeParse(args).success).toBe(false);
+  });
+
+  it('describes coordinates in the last screenshot frame', () => {
+    expect(computerInputSchema.shape.coordinate.description).toContain('last screenshot frame');
+    expect(computerInputSchema.shape.start_coordinate.description).toContain('last screenshot frame');
+  });
+
   it('offers exactly the actions the extension accepts', () => {
     expect(computerInputSchema.shape.action.options).toEqual([...COMPUTER_ACTIONS]);
   });
