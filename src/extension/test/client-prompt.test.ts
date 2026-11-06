@@ -71,6 +71,13 @@ describe('client approval prompt', () => {
     approvals.close();
   });
 
+  it('sends the code preview of a javascript_tool request', () => {
+    const { sent, ask, approvals } = setup();
+    ask({ ...REQUEST, tool: 'javascript_tool', action: 'execute_javascript', code: 'document.title' });
+    expect(sent[0]).toMatchObject({ tool: 'javascript_tool', action: 'execute_javascript', code: 'document.title' });
+    approvals.close();
+  });
+
   it('resolves with the parsed answer of the matching response', async () => {
     const { ask, answer } = setup();
     const { state, requestId } = ask();

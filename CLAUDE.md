@@ -121,6 +121,7 @@ src/                   npm package root; every command is run from here
       main-text.ts     page text: content root selection, whitespace normalisation, truncation
       page-text.ts     entry of the injected bundle dist/extension/page/page-text.js: installs the get_page_text entry point once per document
       page-text-api.ts  entry point name, script path and result types shared with the tool
+      main-world-eval.ts  javascript_tool fallback injected as a func in the page's MAIN world: CSP check, indirect eval with an async rerun for top-level await/return, result serialized to the BiDi RemoteValue shape
     permissions/       site permissions: model, storage, enforcement gate, approval prompt
       actions.ts       permission action types and the mapping from tool calls
       site.ts          http(s)-only URL to host normalization, host and wildcard matching
@@ -131,7 +132,7 @@ src/                   npm package root; every command is run from here
       approval.ts      ApprovalPrompt interface (requestApproval -> decision), prompt messages and answer parsing
       popup-prompt.ts  popup window prompt: windows.create, pending requests, runtime messages, close and 120 s timeout
       client-prompt.ts  prompt answered in the MCP client (elicitation) over the native port, used for flagged calls; deny on timeout or disconnect
-      prompt.html, prompt.ts  the prompt page: host, action, tool, allow/deny once/always, include subdomains
+      prompt.html, prompt.ts  the prompt page: host, action, tool, code preview, allow/deny once/always, include subdomains
     tools/             tool handlers and registry (index.ts)
       navigation-input.ts  pure argument validation for navigate, tabs_create, tabs_close
       computer-input.ts  pure argument validation for the computer tool (screenshot, zoom, clicks, hover, drag, scroll, scroll_to, type, key, wait)
@@ -158,6 +159,8 @@ src/                   npm package root; every command is run from here
       form-input.ts    form_input tool: runs the form_input entry point of the read_page bundle behind the type permission
       resize-window-input.ts  pure argument validation for resize_window: sizes floored, 1 to 7680x4320
       resize-window.ts  resize_window tool: windows.update of the tab's normal window (state reset to normal), reports requested and actual size
+      javascript-input.ts  pure argument validation for javascript_tool: action javascript_exec, code up to 100,000 characters
+      javascript.ts    javascript_tool: execute_javascript gate with a code preview, BiDi evaluate, MAIN-world eval fallback only when BiDi is unavailable (formatted with host/remote-value-format.ts), result withheld when the tab left for an unapproved site
       tab-access.ts    shared tab helpers for page tools: resolve the target tab, restricted domains, permission and restricted page messages
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point

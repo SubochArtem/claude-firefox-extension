@@ -67,7 +67,7 @@ export async function requireSameSite(tool: string, tabId: number, host: string,
   return url;
 }
 
-async function injectionFailure(tabId: number, url: string, error: unknown, label: ActionLabel): Promise<ToolError> {
+export async function injectionFailure(tabId: number, url: string, error: unknown, label: ActionLabel): Promise<ToolError> {
   const message = errorMessage(error);
   if (!isPermissionError(message)) return new ToolError(`Failed to ${label.target} tab ${tabId}: ${message}`);
   if (!(await browser.permissions.contains({ origins: ['<all_urls>'] }))) {
@@ -136,12 +136,14 @@ export interface OpenTab {
   host: string;
 }
 
-// Resolves the tab and runs the site gate for the access's action, without touching the page.
+// Resolves the tab and runs the site gate for the access's action, without touching the page. code is a
+// preview of the code the tool will run, for the prompt.
 export async function openTabPage(
   tool: string,
   requestedTabId: number | undefined,
   prompt: ApprovalPrompt,
   access: PageAccess = READ_ACCESS,
+  code?: string,
 ): Promise<OpenTab> {
   const { label } = access;
   const tab = await resolveTab(requestedTabId, label);
@@ -152,7 +154,13 @@ export async function openTabPage(
     throw new ToolError(permissionMessage(label.verb));
   }
   const host = await requireSiteAccess(
-    { url, tool, action: access.action, subject: `Cannot ${label.target} tab ${tab.id} (${url})` },
+    {
+      url,
+      tool,
+      action: access.action,
+      subject: `Cannot ${label.target} tab ${tab.id} (${url})`,
+      ...(code === undefined ? {} : { code }),
+    },
     prompt,
   );
   // The tab may navigate while the permission prompt is open.

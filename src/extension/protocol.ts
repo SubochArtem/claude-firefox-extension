@@ -32,6 +32,7 @@ export interface PermissionRequest {
   tool: string;
   action: string;
   canIncludeSubdomains: boolean;
+  code?: string;
 }
 
 // The answer fields are left to parseApprovalAnswer, which denies anything it does not accept.

@@ -84,6 +84,20 @@ describe('popup approval prompt', () => {
     await flush();
   });
 
+  it('hands a code preview to the prompt page', async () => {
+    const { id, sender } = await open({ ...REQUEST, tool: 'javascript_tool', action: 'execute_javascript', code: 'document.title' });
+    expect(await handlePromptMessage({ type: PROMPT_GET_MESSAGE, id }, sender)).toEqual({
+      pending: true,
+      host: 'example.com',
+      tool: 'javascript_tool',
+      action: 'execute_javascript',
+      canIncludeSubdomains: true,
+      code: 'document.title',
+    });
+    browserMock.windows.onRemoved.emit(WINDOW);
+    await flush();
+  });
+
   it.each(['localhost', '127.0.0.1'])('offers no subdomain option for %s', async (host) => {
     const { id, sender } = await open({ ...REQUEST, host, url: `http://${host}/` });
     expect(await handlePromptMessage({ type: PROMPT_GET_MESSAGE, id }, sender)).toMatchObject({

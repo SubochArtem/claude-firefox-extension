@@ -70,6 +70,11 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('form_input', undefined)).toBe('type');
   });
 
+  it('maps javascript_tool to execute_javascript', () => {
+    expect(permissionActionForTool('javascript_tool', { action: 'javascript_exec', text: '1', tabId: 1 })).toBe('execute_javascript');
+    expect(permissionActionForTool('javascript_tool', undefined)).toBe('execute_javascript');
+  });
+
   it.each([undefined, null, 'url', 42, ['https://example.com']])('treats non-object args %j as empty', (args) => {
     expect(permissionActionForTool('navigate', args)).toBe('navigate');
     expect(permissionActionForTool('tabs_create', args)).toBeUndefined();

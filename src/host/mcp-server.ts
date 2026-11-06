@@ -365,6 +365,21 @@ export const resizeWindowInputSchema = z.strictObject({
   tabId: z.number().int().positive().optional().describe('Id of a tab in the window, from tabs_context; defaults to the active tab'),
 });
 
+// The extension refuses longer code; MAX_CODE_LENGTH in extension/tools/javascript-input.ts.
+export const MAX_JAVASCRIPT_CODE_LENGTH = 100_000;
+
+export const javascriptInputSchema = z.strictObject({
+  action: z.literal('javascript_exec').describe('Must be "javascript_exec"'),
+  text: z
+    .string()
+    .min(1)
+    .max(MAX_JAVASCRIPT_CODE_LENGTH)
+    .describe(
+      'JavaScript code to run in the page. The value of the last expression statement is returned, e.g. "document.title" or "[...document.links].map((a) => a.href)"; a returned promise is awaited. Top-level await and return are allowed; such code runs as the body of an async function, so give its result with return.',
+    ),
+  tabId: z.number().int().positive().optional().describe('Id of the tab, from tabs_context; defaults to the active tab'),
+});
+
 export function supportsFormElicitation(capabilities: ClientCapabilities | undefined): boolean {
   return capabilities?.elicitation?.form !== undefined;
 }
@@ -375,7 +390,7 @@ const DECISION_DESCRIPTION =
 export function permissionElicitation(request: PermissionRequest): ElicitRequestFormParams {
   return {
     mode: 'form',
-    message: `Claude wants to access ${request.host} in Firefox.\nAction: ${request.action}\nTool: ${request.tool}`,
+    message: `Claude wants to access ${request.host} in Firefox.\nAction: ${request.action}\nTool: ${request.tool}${request.code === undefined ? '' : `\nCode:\n${request.code}`}`,
     requestedSchema: {
       type: 'object',
       properties: {
@@ -523,6 +538,16 @@ export async function runMcpServer(): Promise<void> {
       inputSchema: resizeWindowInputSchema,
     },
     forward('resize_window'),
+  );
+
+  server.registerTool(
+    'javascript_tool',
+    {
+      description:
+        'Run JavaScript in a page\'s main world, the same realm as the page\'s own scripts, so it sees and can change page globals, the DOM and the page\'s state. Returns the value of the last expression as readable text (objects, arrays, maps and sets up to 4 levels deep, DOM nodes as short descriptions, at most 50000 characters); an uncaught exception is returned as an error with its stack. Values under keys like password, token, secret, auth, cookie or session and JWT-like strings are redacted on a best-effort basis; secrets inside other text are not. The script has 30 s; a script that runs longer cannot be stopped and may keep running in the page. Runs through WebDriver BiDi, so the page\'s Content Security Policy does not apply; Firefox must be started with --remote-debugging-port, otherwise it falls back to eval in the page, which the page\'s Content Security Policy may block, and the result says so. Needs the user\'s permission for the site. Defaults to the active tab; get other tab ids from tabs_context.',
+      inputSchema: javascriptInputSchema,
+    },
+    forward('javascript_tool'),
   );
 
   // StdioServerTransport does not exit on stdin EOF, and an open bridge socket would keep the

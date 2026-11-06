@@ -7,6 +7,8 @@ export interface ApprovalRequest {
   url: string;
   tool: string;
   action: PermissionAction;
+  // A preview of the code the tool will run, shown in the prompt.
+  code?: string;
 }
 
 export const APPROVAL_ANSWERS = ['allow_once', 'allow_always', 'deny', 'deny_always'] as const;
@@ -27,6 +29,7 @@ export interface PromptDetails {
   tool: string;
   action: PermissionAction;
   canIncludeSubdomains: boolean;
+  code?: string;
 }
 
 export function promptDetails(request: ApprovalRequest): PromptDetails {
@@ -35,6 +38,7 @@ export function promptDetails(request: ApprovalRequest): PromptDetails {
     tool: request.tool,
     action: request.action,
     canIncludeSubdomains: canHaveWildcard(request.host),
+    ...(request.code === undefined ? {} : { code: request.code }),
   };
 }
 

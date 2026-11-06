@@ -13,7 +13,7 @@ import {
 export const PROMPT_TIMEOUT_MS = 120_000;
 export const PROMPT_PAGE = 'permissions/prompt.html';
 export const PROMPT_WIDTH = 480;
-export const PROMPT_HEIGHT = 420;
+export const PROMPT_HEIGHT = 540;
 
 const CLOSED: ApprovalDecision = { kind: 'answered', answer: 'deny', wildcard: false };
 

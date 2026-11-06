@@ -7,6 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { getDefaultEnvironment, StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ElicitRequestSchema, type ElicitRequest, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import { describe, expect, it, onTestFinished } from 'vitest';
+import { permissionElicitation } from '../mcp-server';
 import {
   APP_DIR,
   bridgeInfoPathIn,
@@ -84,7 +85,7 @@ describe('MCP server process', () => {
   it('lists tabs_context first, with an empty input schema', async () => {
     const { client } = await startMcp(await tempDir());
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text', 'find', 'form_input', 'resize_window']);
+    expect(tools.map((tool) => tool.name)).toEqual(['tabs_context', 'navigate', 'tabs_create', 'tabs_close', 'computer', 'read_page', 'get_page_text', 'find', 'form_input', 'resize_window', 'javascript_tool']);
     expect(tools[0]?.description).toMatch(/tab ids/);
     expect(tools[0]?.inputSchema).toMatchObject({ type: 'object', properties: {} });
   });
@@ -280,6 +281,21 @@ describe('MCP server process', () => {
     expect(Object.keys(resize?.inputSchema.properties ?? {})).toEqual(['width', 'height', 'tabId']);
     expect(resize?.inputSchema.required).toEqual(['width', 'height']);
     expect(resize?.description).toMatch(/viewport/);
+  });
+
+  it('lists javascript_tool with a required action and code and an optional tabId', async () => {
+    const { client } = await startMcp(await tempDir());
+    const { tools } = await client.listTools();
+    const javascript = tools.find((tool) => tool.name === 'javascript_tool');
+    expect(javascript?.inputSchema).toMatchObject({
+      type: 'object',
+      properties: { action: { const: 'javascript_exec' }, text: { type: 'string', minLength: 1, maxLength: 100_000 }, tabId: { type: 'integer' } },
+    });
+    expect(Object.keys(javascript?.inputSchema.properties ?? {})).toEqual(['action', 'text', 'tabId']);
+    expect(javascript?.inputSchema.required).toEqual(['action', 'text']);
+    expect(javascript?.description).toMatch(/main world/);
+    expect(javascript?.description).toMatch(/redacted/);
+    expect(javascript?.description).toMatch(/30 s/);
   });
 
   it('returns a screenshot from the extension as MCP text and image content', async () => {
@@ -615,6 +631,30 @@ async function startNavigate(host: FakeHost, client: Client) {
   });
   return { call, request };
 }
+
+describe('permissionElicitation', () => {
+  const request = {
+    type: 'permission_request' as const,
+    requestId: 'req-1',
+    callId: '1',
+    host: 'example.com',
+    tool: 'javascript_tool',
+    action: 'execute_javascript',
+    canIncludeSubdomains: true,
+  };
+
+  it('shows the code preview after the action and tool', () => {
+    expect(permissionElicitation({ ...request, code: 'document.title' }).message).toBe(
+      'Claude wants to access example.com in Firefox.\nAction: execute_javascript\nTool: javascript_tool\nCode:\ndocument.title',
+    );
+  });
+
+  it('shows no code line without a preview', () => {
+    expect(permissionElicitation(request).message).toBe(
+      'Claude wants to access example.com in Firefox.\nAction: execute_javascript\nTool: javascript_tool',
+    );
+  });
+});
 
 describe('MCP server permission elicitation', () => {
   it('does not flag calls for client approval when the client has no elicitation capability, and denies its permission requests', async () => {
