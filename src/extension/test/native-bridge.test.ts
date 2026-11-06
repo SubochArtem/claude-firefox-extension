@@ -460,6 +460,15 @@ describe('bidi evaluate channel', () => {
     expect(executeTool).toHaveBeenCalledWith(request, expect.anything(), expect.anything(), channels[0]);
   });
 
+  it('exposes the channels of the current port and drops them when the port goes', async () => {
+    const channels = await bridgeWithChannels();
+    expect(bridge.bidiChannels()).toEqual({ input: undefined, evaluate: undefined });
+    const port = connectAndPong();
+    expect(bridge.bidiChannels()).toEqual({ input: expect.any(Object), evaluate: channels[0] });
+    port.emitDisconnect();
+    expect(bridge.bidiChannels()).toEqual({ input: undefined, evaluate: undefined });
+  });
+
   it('fails pending evaluate requests when the port disconnects', async () => {
     const channels = await bridgeWithChannels();
     const port = connectAndPong();

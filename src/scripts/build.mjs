@@ -3,6 +3,7 @@ import { cp, readFile, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { build } from 'esbuild';
 import { buildTimeModules } from './build-time-modules.mjs';
+import { packageInputs } from './bundle-guard.mjs';
 
 const root = join(import.meta.dirname, '..');
 const srcDir = join(root, 'extension');
@@ -41,7 +42,7 @@ await rm(outDir, { recursive: true, force: true });
 await rm(hostOutDir, { recursive: true, force: true });
 
 try {
-  await build({
+  const extensionBuild = await build({
     entryPoints,
     outbase: srcDir,
     outdir: outDir,
@@ -52,7 +53,14 @@ try {
     target: 'firefox158',
     logLevel: 'warning',
     plugins: [buildTimeModules(extensionBuildTimeModules)],
+    metafile: true,
   });
+  const zodInputs = packageInputs(extensionBuild.metafile, 'zod');
+  if (zodInputs.length > 0) {
+    console.error('Build failed: the extension bundle includes zod, which must stay in the host:');
+    for (const input of zodInputs.slice(0, 5)) console.error(`  ${input}`);
+    process.exit(1);
+  }
   await build({
     entryPoints: [hostEntryPoint],
     outfile: join(hostOutDir, 'index.js'),

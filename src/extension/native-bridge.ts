@@ -27,6 +27,11 @@ let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let stableTimer: ReturnType<typeof setTimeout> | undefined;
 let retryDelay = INITIAL_RETRY_DELAY_MS;
 
+// The BiDi channels of the current port, for tool calls that do not come over the port (sidebar chat).
+export function bidiChannels(): { input: BidiInputChannel | undefined; evaluate: BidiEvaluateChannel | undefined } {
+  return { input: bidiInput, evaluate: bidiEvaluate };
+}
+
 export function connect(): void {
   if (port || retryTimer !== undefined) return;
 
