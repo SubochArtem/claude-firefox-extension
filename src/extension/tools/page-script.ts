@@ -15,12 +15,14 @@ import { ToolError } from './tool-error';
 
 export const PAGE_SCRIPT_TIMEOUT_MS = 30_000;
 
-// A page bundle that installs a function under `entry` on the global of the extension's isolated world.
+// A page bundle that installs a function under `entry` on the global of the extension's isolated world,
+// or of the page's own world with world MAIN.
 export interface PageScript<Options, Result> {
   entry: string;
   file: string;
   options: Options;
   isResult: (value: unknown) => value is Result;
+  world?: 'MAIN';
 }
 
 // What a page tool does on the site: the permission it needs and the wording of its errors.
@@ -102,9 +104,11 @@ async function runInPage<Options, Result>(
   script: PageScript<Options, Result>,
   label: ActionLabel,
 ): Promise<Result> {
+  const world = script.world === undefined ? {} : { world: script.world };
   const call = async (): Promise<Result | Missing> => {
     const reply = await execute(tabId, url, label, {
       target: { tabId },
+      ...world,
       func: callEntry,
       args: [script.entry, script.options],
     });
@@ -113,7 +117,7 @@ async function runInPage<Options, Result>(
   };
   let reply = await call();
   if (isMissing(reply)) {
-    await execute(tabId, url, label, { target: { tabId }, files: [script.file] });
+    await execute(tabId, url, label, { target: { tabId }, ...world, files: [script.file] });
     reply = await call();
   }
   if (isMissing(reply)) throw new ToolError(`Failed to ${label.target} tab ${tabId}: the page script did not load`);

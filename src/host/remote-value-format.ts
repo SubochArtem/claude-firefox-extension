@@ -10,7 +10,7 @@ const NODE_ATTRIBUTES = ['id', 'class', 'name', 'type', 'role', 'href', 'src'];
 
 // Best-effort redaction: it catches the common shapes of credentials in returned data (values under
 // such keys, bare JWTs), not secrets in arbitrary text, and it also hides harmless keys like "author".
-const SENSITIVE_KEY = /password|passwd|secret|token|api[_-]?key|auth|credential|private[_-]?key|access[_-]?key|bearer|session|cookie/i;
+export const SENSITIVE_KEY = /password|passwd|secret|token|api[_-]?key|auth|credential|private[_-]?key|access[_-]?key|bearer|session|cookie/i;
 const JWT = /^eyJ[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]*$/;
 const IDENTIFIER = /^[A-Za-z_$][\w$]*$/;
 

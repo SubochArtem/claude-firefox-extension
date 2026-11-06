@@ -39,7 +39,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Permissions: per-site (host, optional subdomain wildcard) allow/deny once/always records in `storage.local`, deny wins, only http(s) URLs; agent tabs in a "Claude" container by default; see [Permissions](docs/decisions.md#permissions).
 - Input: WebDriver BiDi `input.performActions` run by the native host, with a fallback to synthetic DOM events (`isTrusted=false`, the result carries a warning) only when the host reports BiDi itself unavailable (closed or non-BiDi port, refused `session.new`, tab's context not found), never for other input errors or a lost native port; the user starts Firefox with `--remote-debugging-port` (9222, override with `CLAUDE_FIREFOX_BIDI_PORT` in Firefox's environment); one BiDi session per request with `session.end` always sent; tab to context through a random marker set in the page's main world; background tabs are not activated, except by `scroll` (Firefox ignores wheel scrolling in background tabs); see [Input](docs/decisions.md#input-webdriver-bidi).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
-- DevTools tools: `resize_window` resizes normal windows only, with no site permission, resets the window state to normal and reports the actual size; `javascript_tool` runs through BiDi `script.evaluate` in the page's main realm (bypasses page CSP), falling back to `scripting.executeScript` in the MAIN world only when BiDi is unavailable, behind an `execute_javascript` site permission; console and network capture start per tab on the first read call; see [DevTools tools](docs/decisions.md#devtools-tools).
+- DevTools tools: `resize_window` resizes normal windows only, with no site permission, resets the window state to normal and reports the actual size; `javascript_tool` runs through BiDi `script.evaluate` in the page's main realm (bypasses page CSP), falling back to `scripting.executeScript` in the MAIN world only when BiDi is unavailable, behind an `execute_javascript` site permission; console and network capture start per tab on the first read call, console capture through a MAIN-world content script registered at `document_start` for the hosts of tracked tabs; see [DevTools tools](docs/decisions.md#devtools-tools).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -89,7 +89,7 @@ src/                   npm package root; every command is run from here
   tsconfig.json        type check for build scripts, their tests, web-ext and Vitest config (Node types, no DOM)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
   vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), scripts
-  scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js and page/page-text.js) into dist/extension and host/ into dist/host
+  scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js, page/page-text.js and page/console-capture.js) into dist/extension and host/ into dist/host
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows; remote debugging start note
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
@@ -103,7 +103,7 @@ src/                   npm package root; every command is run from here
       options.html, options.ts  the page: renders with textContent, live refresh on storage changes
       options-view.ts  pure rows for the permission list
       options-messages.ts  background handler for revoke requests from the options page
-    page/              code that runs inside the page, in the isolated world of the top frame (no browser.* calls)
+    page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
       element-role.ts  role from the role attribute or the tag, interactive check, heading level
       accessible-name.ts  accessible name, visible text, sensitive field check, text clipping and quote escaping
@@ -121,6 +121,11 @@ src/                   npm package root; every command is run from here
       main-text.ts     page text: content root selection, whitespace normalisation, truncation
       page-text.ts     entry of the injected bundle dist/extension/page/page-text.js: installs the get_page_text entry point once per document
       page-text-api.ts  entry point name, script path and result types shared with the tool
+      console-capture-api.ts  read_console_messages entry point name, script path, levels, buffer and entry caps, entry and read result types
+      console-args.ts  text of a console call: printf-style specifiers, compact description of values (errors with stack, nodes, containers, circular refs), 2,000 character cap
+      console-filter.ts  console entry selection: onlyErrors, case-insensitive regex pattern with a plain text fallback, the most recent matches up to the limit
+      console-buffer.ts  MAIN-world console capture: wraps console methods with call-through, records error and unhandledrejection events, 10,000 entry ring buffer, read entry point with clear
+      console-capture.ts  entry of the bundle dist/extension/page/console-capture.js run in the MAIN world (registered content script or injection): installs the capture once per document
       main-world-eval.ts  javascript_tool fallback injected as a func in the page's MAIN world: CSP check, indirect eval with an async rerun for top-level await/return, result serialized to the BiDi RemoteValue shape
     permissions/       site permissions: model, storage, enforcement gate, approval prompt
       actions.ts       permission action types and the mapping from tool calls
@@ -150,7 +155,7 @@ src/                   npm package root; every command is run from here
       synthetic-input.ts  synthetic input fallback: runs the page entry after the same-site check, DOM key names and modifier flags, the fallback warning
       read-page-input.ts  pure argument validation for read_page
       read-page.ts     read_page tool: options, result check and output on top of page-script.ts
-      page-script.ts   shared runner for page bundles: site gate for the tool's action (openTabPage), landed-site re-checks, injects the bundle only when missing (runOnTabPage; changeTabPage for input, checked by the caller), restricted page and timeout errors
+      page-script.ts   shared runner for page bundles (isolated or MAIN world): site gate for the tool's action (openTabPage), landed-site re-checks, injects the bundle only when missing (runOnTabPage; changeTabPage for input, checked by the caller), restricted page and timeout errors
       page-text-input.ts  pure argument validation for get_page_text
       page-text.ts     get_page_text tool: title, URL, source element and text of the page
       find-input.ts    pure argument validation for find
@@ -161,6 +166,10 @@ src/                   npm package root; every command is run from here
       resize-window.ts  resize_window tool: windows.update of the tab's normal window (state reset to normal), reports requested and actual size
       javascript-input.ts  pure argument validation for javascript_tool: action javascript_exec, code up to 100,000 characters
       javascript.ts    javascript_tool: execute_javascript gate with a code preview, BiDi evaluate, MAIN-world eval fallback only when BiDi is unavailable (formatted with host/remote-value-format.ts), result withheld when the tab left for an unapproved site
+      console-input.ts  pure argument validation for read_console_messages: onlyErrors, pattern up to 500 characters, limit 1 to 1000 (default 100), clear
+      console-output.ts  read_console_messages output: summary, one line per entry with level and local time, notes, best-effort redaction of URLs, JWTs, sensitive key values and bearer tokens
+      console-tracking.ts  tabs with console capture and their hosts in storage.session: track on the first call, keep the document_start content script registration in step with the tracked hosts (reconciled on every background start), inject the capture on top-frame http(s) commits as a fallback, untrack on tab close
+      console.ts       read_console_messages tool: read_console_messages gate, tracking, MAIN-world read through page-script.ts
       tab-access.ts    shared tab helpers for page tools: resolve the target tab, restricted domains, permission and restricted page messages
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point

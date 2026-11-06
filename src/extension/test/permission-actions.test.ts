@@ -75,6 +75,11 @@ describe('permissionActionForTool', () => {
     expect(permissionActionForTool('javascript_tool', undefined)).toBe('execute_javascript');
   });
 
+  it('maps read_console_messages to read_console_messages', () => {
+    expect(permissionActionForTool('read_console_messages', { tabId: 1, onlyErrors: true })).toBe('read_console_messages');
+    expect(permissionActionForTool('read_console_messages', undefined)).toBe('read_console_messages');
+  });
+
   it.each([undefined, null, 'url', 42, ['https://example.com']])('treats non-object args %j as empty', (args) => {
     expect(permissionActionForTool('navigate', args)).toBe('navigate');
     expect(permissionActionForTool('tabs_create', args)).toBeUndefined();

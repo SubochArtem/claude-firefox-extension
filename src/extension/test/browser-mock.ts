@@ -143,12 +143,35 @@ export function mockBrowser() {
     connectNative,
     getURL: vi.fn((path: string) => `${EXTENSION_ORIGIN}/${path}`),
   };
+  const contentScripts = new Map<string, browser.scripting.RegisteredContentScript>();
+  const selectScripts = (filter?: browser.scripting.ContentScriptFilter) =>
+    [...contentScripts.values()].filter((script) => filter?.ids === undefined || filter.ids.includes(script.id));
+  // An in-memory registry of dynamic content scripts that rejects duplicate and unknown ids like Firefox does.
   const scripting = {
     executeScript: vi.fn<
       (injection: browser.scripting.ScriptInjection<unknown[], unknown>) => Promise<browser.scripting.InjectionResult<unknown>[]>
     >(async () => {
       throw new Error('executeScript is not mocked');
     }),
+    contentScripts,
+    registerContentScripts: vi.fn<(scripts: browser.scripting.RegisteredContentScript[]) => Promise<void>>(async (scripts) => {
+      for (const script of scripts) {
+        if (contentScripts.has(script.id)) throw new Error(`Content script with id "${script.id}" is already registered.`);
+      }
+      for (const script of scripts) contentScripts.set(script.id, structuredClone(script));
+    }),
+    updateContentScripts: vi.fn<(scripts: browser.scripting._UpdateContentScriptsScripts[]) => Promise<void>>(async (scripts) => {
+      for (const script of scripts) {
+        if (!contentScripts.has(script.id)) throw new Error(`Content script with id "${script.id}" does not exist.`);
+      }
+      for (const script of scripts) contentScripts.set(script.id, { ...contentScripts.get(script.id), ...structuredClone(script) });
+    }),
+    unregisterContentScripts: vi.fn<(filter?: browser.scripting.ContentScriptFilter) => Promise<void>>(async (filter) => {
+      for (const script of selectScripts(filter)) contentScripts.delete(script.id);
+    }),
+    getRegisteredContentScripts: vi.fn<
+      (filter?: browser.scripting.ContentScriptFilter) => Promise<browser.scripting.RegisteredContentScript[]>
+    >(async (filter) => selectScripts(filter).map((script) => structuredClone(script))),
   };
   const permissions = {
     contains: vi.fn<(permissions: browser.permissions.AnyPermissions) => Promise<boolean>>(async () => false),
@@ -177,7 +200,17 @@ export function mockBrowser() {
     ),
   };
   const storageData = new Map<string, unknown>();
+  const sessionData = new Map<string, unknown>();
   const storage = {
+    session: {
+      data: sessionData,
+      get: vi.fn<(key: string) => Promise<Record<string, unknown>>>(async (key) =>
+        sessionData.has(key) ? { [key]: structuredClone(sessionData.get(key)) } : {},
+      ),
+      set: vi.fn<(items: Record<string, unknown>) => Promise<void>>(async (items) => {
+        for (const [key, value] of Object.entries(items)) sessionData.set(key, structuredClone(value));
+      }),
+    },
     local: {
       data: storageData,
       get: vi.fn<(key: string) => Promise<Record<string, unknown>>>(async (key) =>

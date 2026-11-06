@@ -53,6 +53,8 @@ export function permissionActionForTool(tool: string, args: unknown): Permission
       return 'type';
     case 'javascript_tool':
       return 'execute_javascript';
+    case 'read_console_messages':
+      return 'read_console_messages';
     default:
       return undefined;
   }
