@@ -226,6 +226,11 @@ describe('links', () => {
     expect(render('ftp://e.com mailto:a@b.c xhttps://e.com').querySelector('a')).toBeNull();
   });
 
+  it('does not link bare URLs longer than the scan limit', () => {
+    const url = `https://e.com/${'a'.repeat(5_000)}`;
+    expect(render(`see ${url} and https://e.com/b`).querySelectorAll('a')).toHaveLength(1);
+  });
+
   it('does not link a URL inside inline code', () => {
     expect(html('`https://e.com`')).toBe('<p><code>https://e.com</code></p>');
   });
@@ -346,7 +351,7 @@ describe('partial streaming input', () => {
   });
 
   it('renders long pathological input in reasonable time', () => {
-    const inputs = ['*a '.repeat(20_000), 'a* '.repeat(20_000), '['.repeat(20_000), '[a]('.repeat(5_000), '`'.repeat(5_000) + ' x ``'.repeat(5_000), '- '.repeat(20_000)];
+    const inputs = ['*a '.repeat(20_000), 'a* '.repeat(20_000), '['.repeat(20_000), '[a]('.repeat(5_000), '`'.repeat(5_000) + ' x ``'.repeat(5_000), '- '.repeat(20_000), 'http://['.repeat(15_000), ('http://['.repeat(500) + ' ').repeat(30)];
     const started = Date.now();
     for (const input of inputs) render(input);
     expect(Date.now() - started).toBeLessThan(5_000);

@@ -6,6 +6,7 @@ const LANGUAGE = /^[\w+#.-]{1,32}$/;
 const ASCII_PUNCTUATION = /^[!-/:-@[-`{-~]$/;
 const ALPHANUMERIC = /^[\p{L}\p{N}]$/u;
 const WHITESPACE = /^\s$/;
+const BARE_URL_END = /[^\s<>]*/y;
 
 interface BlockContext {
   doc: Document;
@@ -290,6 +291,7 @@ function appendToken(parent: Node, token: InlineToken, doc: Document): void {
 function tokenizeInline(text: string, doc: Document, inLink: boolean): InlineToken[] {
   const tokens: InlineToken[] = [];
   const failedCodeSearch = new Map<number, number>();
+  const bareUrlScan = { end: 0 };
   let buffer = '';
   const flush = (): void => {
     if (buffer) tokens.push({ kind: 'node', node: doc.createTextNode(buffer) });
@@ -360,7 +362,7 @@ function tokenizeInline(text: string, doc: Document, inLink: boolean): InlineTok
       }
     }
     if (!inLink && (char === 'h' || char === 'H')) {
-      const url = matchBareUrl(text, i);
+      const url = matchBareUrl(text, i, bareUrlScan);
       const href = url === null ? null : safeHref(url);
       if (url !== null && href !== null) {
         const anchor = createAnchor(doc, href);
@@ -451,11 +453,16 @@ function skipSpaces(text: string, from: number, limit: number): number {
   return i;
 }
 
-function matchBareUrl(text: string, start: number): string | null {
+function matchBareUrl(text: string, start: number, scan: { end: number }): string | null {
   if (!/^https?:\/\//i.test(text.slice(start, start + 8))) return null;
   if (start > 0 && ALPHANUMERIC.test(text.charAt(start - 1))) return null;
-  let end = start;
-  while (end < text.length && !/[\s<>]/.test(text.charAt(end))) end++;
+  if (scan.end <= start) {
+    BARE_URL_END.lastIndex = start;
+    BARE_URL_END.test(text);
+    scan.end = BARE_URL_END.lastIndex;
+  }
+  const end = scan.end;
+  if (end - start > LINK_SCAN_LIMIT) return null;
   let url = text.slice(start, end);
   for (;;) {
     const last = url.charAt(url.length - 1);
