@@ -182,10 +182,10 @@ browser.storage.local.onChanged.addListener((changes) => {
   if (SETTINGS_STORAGE_KEY in changes) reportFailure(renderSettings(), 'load the setting');
   if (CHAT_SETTINGS_STORAGE_KEY in changes) reportFailure(renderChatSettings(), 'load the chat settings');
   if (PERMISSION_STORAGE_KEY in changes) reportFailure(renderPermissions(), 'load the site permissions');
-reportFailure(renderClaudeCodeStatus(), 'check Claude Code');
 });
 
 reportFailure(renderSettings(), 'load the setting');
 reportFailure(renderChatSettings(), 'load the chat settings');
 reportFailure(renderApiAccess(), 'check access to api.anthropic.com');
 reportFailure(renderPermissions(), 'load the site permissions');
+reportFailure(renderClaudeCodeStatus(), 'check Claude Code');
