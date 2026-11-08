@@ -14,6 +14,7 @@ const CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
 // API key, a token or a cloud provider.
 const DROPPED_ENV = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
 const DROPPED_ENV_PREFIX = 'CLAUDE_CODE_USE_';
+const SUBSCRIPTION_AUTH_METHOD = 'claude.ai';
 
 export class ChatStartError extends Error {
   constructor(
@@ -148,6 +149,7 @@ export function claudeChatArgs({
     'mcp__firefox__*',
     '--permission-mode',
     'dontAsk',
+    '--no-session-persistence',
   ];
   if (model !== undefined) args.push(`--model=${model}`);
   if (appendSystemPrompt !== undefined) args.push(`--append-system-prompt=${appendSystemPrompt}`);
@@ -200,14 +202,18 @@ export async function checkClaude(claude: ClaudeCommand, env: Env): Promise<void
     );
   }
   const auth = await runClaude(claude, ['auth', 'status', '--json'], childEnv);
-  let loggedIn = false;
+  let subscription = false;
   try {
     const status: unknown = JSON.parse(auth.stdout);
-    loggedIn = typeof status === 'object' && status !== null && (status as Record<string, unknown>)['loggedIn'] === true;
+    if (typeof status === 'object' && status !== null) {
+      const { loggedIn, authMethod } = status as Record<string, unknown>;
+      // Older CLIs do not report authMethod; their login is accepted as it is.
+      subscription = loggedIn === true && (authMethod === undefined || authMethod === SUBSCRIPTION_AUTH_METHOD);
+    }
   } catch {
-    loggedIn = false;
+    subscription = false;
   }
-  if (!loggedIn) {
+  if (!subscription) {
     throw new ChatStartError(
       'not_logged_in',
       'Claude Code is not logged in with a Claude subscription. Run "claude auth login" in a terminal, then start the chat again. API keys and cloud providers are not used for the sidebar.',

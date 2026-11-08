@@ -1,6 +1,7 @@
 // Stands in for the `claude` CLI in the chat session tests. Controlled by the environment:
 // FAKE_CLAUDE_VERSION      output of --version (default "2.1.316 (Claude Code)")
 // FAKE_CLAUDE_LOGGED_IN    "false" makes `auth status --json` report loggedIn false
+// FAKE_CLAUDE_AUTH_METHOD  authMethod reported when logged in (default "claude.ai", "absent" leaves it out)
 // FAKE_CLAUDE_RECORD       file that gets one JSON line per run: argv, cwd and environment
 // FAKE_CLAUDE_MODE         "crash" (stderr and exit 3 at start), "stubborn" (ignores stdin end and SIGTERM)
 // In the stream-json loop a user message "hang" starts a turn that only an interrupt ends, "big image"
@@ -20,7 +21,9 @@ if (args[0] === '--version') {
 }
 if (args[0] === 'auth' && args[1] === 'status') {
   const loggedIn = process.env.FAKE_CLAUDE_LOGGED_IN !== 'false';
-  process.stdout.write(`${JSON.stringify({ loggedIn, authMethod: loggedIn ? 'claude.ai' : 'none' }, null, 2)}\n`);
+  const authMethod = loggedIn ? (process.env.FAKE_CLAUDE_AUTH_METHOD ?? 'claude.ai') : 'none';
+  const status = authMethod === 'absent' ? { loggedIn } : { loggedIn, authMethod };
+  process.stdout.write(`${JSON.stringify(status, null, 2)}\n`);
   process.exit(loggedIn ? 0 : 1);
 }
 if (mode === 'crash') {

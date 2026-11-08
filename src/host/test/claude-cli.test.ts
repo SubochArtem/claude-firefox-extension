@@ -190,6 +190,7 @@ describe('claude chat arguments', () => {
       'mcp__firefox__*',
       '--permission-mode',
       'dontAsk',
+      '--no-session-persistence',
     ]);
     expect(args).not.toContain('--bare');
   });
@@ -221,6 +222,15 @@ describe('checkClaude', () => {
     const error = await startErrorOf(checkClaude(fakeCommand, { ...process.env, FAKE_CLAUDE_LOGGED_IN: 'false' }));
     expect(error.code).toBe('not_logged_in');
     expect(error.message).toContain('claude auth login');
+  });
+
+  it.each(['apiKey', 'oauth_token', 'third_party'])('refuses a login with the auth method %s', async (authMethod) => {
+    const error = await startErrorOf(checkClaude(fakeCommand, { ...process.env, FAKE_CLAUDE_AUTH_METHOD: authMethod }));
+    expect(error.code).toBe('not_logged_in');
+  });
+
+  it('accepts a login without an auth method from an older claude', async () => {
+    await expect(checkClaude(fakeCommand, { ...process.env, FAKE_CLAUDE_AUTH_METHOD: 'absent' })).resolves.toBeUndefined();
   });
 
   it('reports a command that cannot be started', async () => {

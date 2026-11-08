@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { chatEventMessage, createLineReader, parseClaudeLine } from '../chat-events';
+import { MAX_OUTGOING_BYTES } from '../native-messaging';
 
 function bytes(message: unknown): number {
   return Buffer.byteLength(JSON.stringify(message));
@@ -109,5 +110,15 @@ describe('chatEventMessage', () => {
     const message = chatEventMessage('s1', { type: 'user', message: { content: [{ type: 'tool_result', content: [image] }] } });
     expect(message.reduced).toBe(true);
     expect(bytes(message)).toBeLessThan(1024 * 1024);
+  });
+
+  it('measures the limit in UTF-8 bytes, not characters', () => {
+    const event = { type: 'assistant', message: { content: [{ type: 'text', text: '€'.repeat(400_000) }] } };
+    const message = chatEventMessage('s1', event);
+    expect(message.reduced).toBe(true);
+    expect(bytes(message)).toBeLessThanOrEqual(MAX_OUTGOING_BYTES);
+    const smaller = chatEventMessage('s1', event, 100_000);
+    expect(smaller.reduced).toBe(true);
+    expect(bytes(smaller)).toBeLessThanOrEqual(100_000);
   });
 });

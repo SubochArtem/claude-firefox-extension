@@ -107,6 +107,7 @@ describe('chat sessions', () => {
       'mcp__firefox__*',
       '--permission-mode',
       'dontAsk',
+      '--no-session-persistence',
       '--model=claude-haiku-5-5',
       '--append-system-prompt=Be brief.',
     ]);
@@ -199,6 +200,18 @@ describe('chat sessions', () => {
       'kill the stubborn session',
     );
     expect(h.of('s1', 'chat_error')).toEqual([]);
+  });
+
+  it('ignores messages and interrupts for a session that is closing', async () => {
+    const h = await harness({ env: { FAKE_CLAUDE_MODE: 'stubborn' }, closeGraceMs: 100 });
+    await started(h);
+    h.handle({ type: 'chat_close', sessionId: 's1' });
+    h.handle({ type: 'chat_send', sessionId: 's1', content: 'too late' });
+    h.handle({ type: 'chat_interrupt', sessionId: 's1' });
+    h.handle({ type: 'chat_close', sessionId: 's1' });
+    await waitFor(() => expect(h.of('s1', 'chat_closed')).toHaveLength(1));
+    expect(h.of('s1', 'chat_error')).toEqual([]);
+    expect(eventTypes(h, 's1')).toEqual(['system/init']);
   });
 
   it('closes a session that is still starting at once', async () => {
@@ -295,5 +308,17 @@ describe('chat sessions', () => {
     await waitFor(() => expect(h.sessions.size()).toBe(0));
     expect(h.of('a', 'chat_error')).toEqual([]);
     expect(h.of('b', 'chat_error')).toEqual([]);
+  });
+
+  it.skipIf(isWindows)('closeAll kills a session that ignores the end of its input and SIGTERM', async () => {
+    const h = await harness({ env: { FAKE_CLAUDE_MODE: 'stubborn' }, closeGraceMs: 100 });
+    await started(h);
+    h.sessions.closeAll();
+    await within(
+      waitFor(() => expect(h.sessions.size()).toBe(0)),
+      3_000,
+      'kill the stubborn session',
+    );
+    expect(h.of('s1', 'chat_closed')).toEqual([]);
   });
 });

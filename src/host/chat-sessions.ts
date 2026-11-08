@@ -38,6 +38,7 @@ interface Session {
   stderrTail: string;
   nextControlId: number;
   killTimer?: NodeJS.Timeout;
+  killed: boolean;
 }
 
 function userLine(content: string | ChatContentBlock[]): string {
@@ -56,7 +57,6 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
     emit({ type: 'chat_error', sessionId, code, message });
   };
 
-  // Every session that was accepted ends here exactly once.
   const finish = (session: Session): void => {
     if (session.finished) return;
     session.finished = true;
@@ -112,6 +112,11 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
         console.error(`${LOG} session ${session.id} process error: ${cause.message}`);
       }
     });
+    // A descendant that inherited the pipes can hold them open after claude is gone, so a killed
+    // session ends on 'exit' instead of waiting for 'close'.
+    child.on('exit', () => {
+      if (session.killed) finish(session);
+    });
     child.on('close', (code, signal) => {
       if (session.finished) return;
       if (!session.closing) {
@@ -140,10 +145,16 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
     }
   };
 
+  const kill = (session: Session, child: ChildProcessWithoutNullStreams): void => {
+    session.killed = true;
+    if (child.exitCode !== null || child.signalCode !== null) finish(session);
+    else child.kill('SIGKILL');
+  };
+
   const killLater = (session: Session, child: ChildProcessWithoutNullStreams): void => {
     session.killTimer = setTimeout(() => {
       child.kill('SIGTERM');
-      session.killTimer = setTimeout(() => child.kill('SIGKILL'), closeGraceMs);
+      session.killTimer = setTimeout(() => kill(session, child), closeGraceMs);
       session.killTimer.unref();
     }, closeGraceMs);
     session.killTimer.unref();
@@ -162,7 +173,7 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
         emit({ type: 'chat_closed', sessionId });
         return;
       }
-      const created: Session = { id: sessionId, queued: [], closing: false, finished: false, stderrTail: '', nextControlId: 1 };
+      const created: Session = { id: sessionId, queued: [], closing: false, finished: false, stderrTail: '', nextControlId: 1, killed: false };
       sessions.set(sessionId, created);
       void start(created, request);
       return;
@@ -172,6 +183,7 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
       else error(sessionId, 'unknown_session', `There is no chat session ${sessionId}`);
       return;
     }
+    if (session.closing) return;
     if (request.type === 'chat_send') {
       write(session, userLine(request.content));
       return;
@@ -183,7 +195,6 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
       write(session, `${JSON.stringify({ type: 'control_request', request_id: requestId, request: { subtype: 'interrupt' } })}\n`);
       return;
     }
-    if (session.closing) return;
     session.closing = true;
     const { child } = session;
     if (!child) {
@@ -204,15 +215,19 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
           finish(session);
           continue;
         }
-        session.child.stdin.end();
-        session.child.kill('SIGTERM');
+        const { child } = session;
+        child.stdin.end();
+        child.kill('SIGTERM');
+        clearTimeout(session.killTimer);
+        session.killTimer = setTimeout(() => kill(session, child), closeGraceMs);
+        session.killTimer.unref();
       }
     },
     killAll: () => {
       silent = true;
       for (const session of sessions.values()) {
         session.closing = true;
-        if (session.child) session.child.kill('SIGKILL');
+        if (session.child) kill(session, session.child);
         else finish(session);
       }
     },

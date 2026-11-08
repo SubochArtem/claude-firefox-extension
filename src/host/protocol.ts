@@ -124,7 +124,8 @@ export type BidiEvaluateResponse =
 
 export const MAX_CHAT_SESSION_ID_LENGTH = 128;
 export const MAX_CHAT_MODEL_LENGTH = 128;
-export const MAX_CHAT_SYSTEM_PROMPT_LENGTH = 100_000;
+// The prompt travels on claude's command line, which Windows limits to 32,767 characters.
+export const MAX_CHAT_SYSTEM_PROMPT_LENGTH = 16_000;
 export const MAX_CHAT_CONTENT_BLOCKS = 100;
 const CHAT_SESSION_ID = /^[A-Za-z0-9_-]+$/;
 // A model alias or full name; never starting with '-', so the CLI cannot read it as an option.
