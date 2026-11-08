@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +16,9 @@ const FAKE_HOST = 'console.log(JSON.stringify(process.argv.slice(2)));\nprocess.
 let packageDir: string;
 
 async function createPackage(): Promise<void> {
-  const base = await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'cfe-'));
+  // On macOS /tmp is a symlink to /private/tmp and the script reports its resolved location.
+  const created = await mkdtemp(join(process.platform === 'win32' ? tmpdir() : '/tmp', 'cfe-'));
+  const base = process.platform === 'win32' ? created : await realpath(created);
   onTestFinished(() => rm(base, { recursive: true, force: true }));
   packageDir = join(base, "it's a pkg");
   await mkdir(join(packageDir, 'scripts'), { recursive: true });
