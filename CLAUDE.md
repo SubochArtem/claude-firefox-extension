@@ -41,7 +41,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - DevTools tools: `resize_window` resizes normal windows only, with no site permission, resets the window state to normal and reports the actual size; `javascript_tool` runs through BiDi `script.evaluate` in the page's main realm (bypasses page CSP), falling back to `scripting.executeScript` in the MAIN world only when BiDi is unavailable, behind an `execute_javascript` site permission; console and network capture start per tab on the first read call, console capture through a MAIN-world content script registered at `document_start` for the hosts of tracked tabs, network capture through top-level non-blocking `webRequest` listeners into a per-tab list of 1,000 requests in `storage.session` that starts over when the tab moves to another site; see [DevTools tools](docs/decisions.md#devtools-tools).
 - Sidebar chat: the sidebar page calls the Anthropic Messages API directly with a user-supplied API key in `storage.local` and runs the agent loop itself (closing the sidebar stops it, history lives until then); own fetch + SSE client and own textContent-only Markdown renderer, no dependencies; tool definitions shared with the MCP server; a local Claude Code backend is a later feature, driving a subscription-logged `claude -p` needs Anthropic's written confirmation, claude.ai login is not available to third parties; see [Sidebar chat](docs/decisions.md#sidebar-chat).
-- Packaging: the native host ships as a Node.js single executable application (SEA, no new runtime or bundler), one binary per OS and architecture; it installs itself (`install`/`uninstall` subcommands, installer in `host/install/` shared with `npm run install-host`), the manifest names the binary directly and the native host mode is detected from the extension id Firefox passes, an upgrade renames a running binary aside (Windows), and it will be released on GitHub Releases; binaries are not code-signed for now; see [Packaging](docs/decisions.md#packaging).
+- Packaging: the native host ships as a Node.js single executable application (SEA, no new runtime or bundler), one binary per OS and architecture; it installs itself (`install`/`uninstall` subcommands, installer in `host/install/` shared with `npm run install-host`), the manifest names the binary directly and the native host mode is detected from the extension id Firefox passes, an upgrade renames a running binary aside (Windows), and a pushed `vX.Y.Z` tag matching `src/package.json` and the extension manifest publishes one binary per target (linux-x64, linux-arm64, macos-arm64, macos-x64, windows-x64), `SHA256SUMS` and the unsigned extension package on GitHub Releases; binaries are not code-signed for now; end-user guide in [`docs/install.md`](docs/install.md); see [Packaging](docs/decisions.md#packaging).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -76,7 +76,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/sidebar-chat`: chat in a Firefox sidebar; options decided at its start after checking Anthropic's terms: a sidebar that talks to the user's local Claude Code through the native host (user signs in to Claude Code as usual), or direct Anthropic API calls with the user's API key. Signing in to claude.ai from the extension like Claude in Chrome is not available to third parties.
 - [ ] `feature/sidebar-claude-code`: the sidebar talks to the user's local Claude Code through the native host; next feature after packaging.
 - [ ] `feature/multi-provider-fork`: a separate extension forked from this one, where the user enters an API URL and API key to work with different AI providers; designed at its start.
-- [ ] `feature/packaging`: installation without Node.js for end users: a native host executable and an installer per OS.
+- [x] `feature/packaging`: installation without Node.js for end users: a native host executable and an installer per OS.
 
 ## Repository layout
 
@@ -84,8 +84,10 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 CLAUDE.md
 .gitignore
 .github/workflows/ci.yml  CI on Linux, Windows, macOS: typecheck, build, lint, test, single executable build and smoke check, then e2e in real Firefox through the self-installed binary (docs/decisions.md#ci)
+.github/workflows/release.yml  release on a pushed v* tag: host binary per OS and architecture, unsigned extension package, SHA256SUMS, GitHub release; manual run is a dry run with workflow artifacts only (docs/decisions.md#packaging)
 docs/
   decisions.md         design details: bridge protocol, Windows installer, threat model, tests, CI, e2e
+  install.md           end-user install guide: download, Gatekeeper and SmartScreen, install, claude mcp add, loading the extension, remote debugging, upgrade, uninstall
 src/                   npm package root; every command is run from here
   package.json
   package-lock.json
@@ -97,12 +99,14 @@ src/                   npm package root; every command is run from here
   scripts/build-binary.mjs  builds the host single executable dist/bin/claude-firefox-host(.exe) from dist/host/sea.cjs (node --build-sea, or the blob plus postject on Node 24)
   scripts/build-binary-lib.mjs  pure parts of the binary build: paths and file names per platform, SEA mechanism choice, sea config, command steps (codesign on macOS)
   scripts/smoke-binary.mjs  smoke check of the built binary: usage without arguments, MCP initialize answered as --mcp, 30 s timeout per run
+  scripts/release.mjs  release steps run by release.yml: check-tag, stage-binary, extension-asset, checksums, notes
+  scripts/release-lib.mjs  pure release logic: targets, asset names, vX.Y.Z tag against package.json and manifest versions, expected asset set, SHA256SUMS format, release notes
   scripts/bundle-guard.mjs  metafile inputs from an npm package; the build fails when the extension bundle includes zod
   scripts/build-time-modules.mjs  esbuild plugin: runs listed modules in Node at build time and inlines their exports as JSON (shared/anthropic-tools.ts in the extension build, so zod is not shipped)
   scripts/install-host.mjs  runs the built host's install/uninstall (dist/host/index.js) for the development build
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions; --binary installs and runs the single executable
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
-  scripts/test/        install-host script, e2e safety, build-time module, bundle guard and binary build tests
+  scripts/test/        install-host script, e2e safety, build-time module, bundle guard, binary build and release tests
   shared/              code used by both host and extension
     tsconfig.json      shared type check (no DOM, no Node), test/ included
     test/              tests of the Anthropic tool definitions
@@ -249,6 +253,7 @@ Run every command from `src/` (`cd src && npm run build`).
 - `npm run build`: bundle `extension/` into `dist/extension` and `host/` into `dist/host`.
 - `npm run build:binary`: build the host single executable `dist/bin/claude-firefox-host` (`.exe` on Windows) for the current platform with the running Node (build first). Use an official Node build: a distribution Node linked against shared system libraries gives a binary that needs them.
 - `npm run smoke:binary`: check that the built binary prints its usage and answers an MCP `initialize` as `--mcp`.
+- Releasing: bump `version` in `package.json` and `extension/manifest.json`, merge, then tag the updated `main` as `vX.Y.Z` and push the tag; `.github/workflows/release.yml` publishes the release ([Packaging](docs/decisions.md#packaging)).
 - `npm run typecheck`: `tsc --noEmit` for the root project (build scripts, installer tests, Vitest config), `extension/`, `host/` and `shared/` (each with its tests).
 - `npm test`: run the Vitest suite once (no build, Firefox or network; temp dirs under `/tmp` only). `npm run test:watch` for watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).
