@@ -41,6 +41,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - DevTools tools: `resize_window` resizes normal windows only, with no site permission, resets the window state to normal and reports the actual size; `javascript_tool` runs through BiDi `script.evaluate` in the page's main realm (bypasses page CSP), falling back to `scripting.executeScript` in the MAIN world only when BiDi is unavailable, behind an `execute_javascript` site permission; console and network capture start per tab on the first read call, console capture through a MAIN-world content script registered at `document_start` for the hosts of tracked tabs, network capture through top-level non-blocking `webRequest` listeners into a per-tab list of 1,000 requests in `storage.session` that starts over when the tab moves to another site; see [DevTools tools](docs/decisions.md#devtools-tools).
 - Sidebar chat: the sidebar page calls the Anthropic Messages API directly with a user-supplied API key in `storage.local` and runs the agent loop itself (closing the sidebar stops it, history lives until then); own fetch + SSE client and own textContent-only Markdown renderer, no dependencies; tool definitions shared with the MCP server; a local Claude Code backend is a later feature, driving a subscription-logged `claude -p` needs Anthropic's written confirmation, claude.ai login is not available to third parties; see [Sidebar chat](docs/decisions.md#sidebar-chat).
+- Packaging: the native host ships as a Node.js single executable application (SEA, no new runtime or bundler), one binary per OS and architecture; it will install itself (`install`/`uninstall` subcommands) and be released on GitHub Releases; binaries are not code-signed for now; see [Packaging](docs/decisions.md#packaging).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -82,7 +83,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 ```
 CLAUDE.md
 .gitignore
-.github/workflows/ci.yml  CI on Linux, Windows, macOS: typecheck, build, lint, test, then e2e in real Firefox (docs/decisions.md#ci)
+.github/workflows/ci.yml  CI on Linux, Windows, macOS: typecheck, build, lint, test, single executable build and smoke check, then e2e in real Firefox (docs/decisions.md#ci)
 docs/
   decisions.md         design details: bridge protocol, Windows installer, threat model, tests, CI, e2e
 src/                   npm package root; every command is run from here
@@ -92,14 +93,17 @@ src/                   npm package root; every command is run from here
   tsconfig.json        type check for build scripts, their tests, web-ext and Vitest config (Node types, no DOM)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
   vitest.config.ts     Vitest projects: extension, host (bundles the host once in a global setup), shared, scripts
-  scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js, page/page-text.js and page/console-capture.js) into dist/extension and host/ into dist/host
+  scripts/build.mjs    esbuild bundling of extension/ (background, pages, injected page/read-page.js, page/page-text.js and page/console-capture.js) into dist/extension and host/ into dist/host (index.js as ESM, sea.cjs as CommonJS for the single executable)
+  scripts/build-binary.mjs  builds the host single executable dist/bin/claude-firefox-host(.exe) from dist/host/sea.cjs (node --build-sea, or the blob plus postject on Node 24)
+  scripts/build-binary-lib.mjs  pure parts of the binary build: paths and file names per platform, SEA mechanism choice, sea config, command steps (codesign on macOS)
+  scripts/smoke-binary.mjs  smoke check of the built binary: usage without arguments, MCP initialize answered as --mcp, 30 s timeout per run
   scripts/bundle-guard.mjs  metafile inputs from an npm package; the build fails when the extension bundle includes zod
   scripts/build-time-modules.mjs  esbuild plugin: runs listed modules in Node at build time and inlines their exports as JSON (shared/anthropic-tools.ts in the extension build, so zod is not shipped)
   scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
   scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows; remote debugging start note
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
-  scripts/test/        installer tests (against a temp HOME), e2e safety tests, build-time module and bundle guard tests
+  scripts/test/        installer tests (against a temp HOME), e2e safety tests, build-time module, bundle guard and binary build tests
   shared/              code used by both host and extension
     tsconfig.json      shared type check (no DOM, no Node), test/ included
     test/              tests of the Anthropic tool definitions
@@ -224,6 +228,9 @@ src/                   npm package root; every command is run from here
   node_modules/        (not committed)
   dist/extension/      built extension, loaded by web-ext (not committed)
   dist/host/index.js   bundled host for Node, run as `node dist/host/index.js --native-host|--mcp` (not committed)
+  dist/host/sea.cjs    the same host as CommonJS, the main script of the single executable (not committed)
+  dist/bin/claude-firefox-host  host single executable for the current platform, `.exe` on Windows (not committed)
+  dist/sea/            intermediate files of the binary build: sea-config.json, the preparation blob with postject (not committed)
   web-ext-artifacts/   (not committed)
 ```
 
@@ -233,6 +240,8 @@ Run every command from `src/` (`cd src && npm run build`).
 
 - `npm install`: install dependencies.
 - `npm run build`: bundle `extension/` into `dist/extension` and `host/` into `dist/host`.
+- `npm run build:binary`: build the host single executable `dist/bin/claude-firefox-host` (`.exe` on Windows) for the current platform with the running Node (build first). Use an official Node build: a distribution Node linked against shared system libraries gives a binary that needs them.
+- `npm run smoke:binary`: check that the built binary prints its usage and answers an MCP `initialize` as `--mcp`.
 - `npm run typecheck`: `tsc --noEmit` for the root project (build scripts, installer tests, Vitest config), `extension/`, `host/` and `shared/` (each with its tests).
 - `npm test`: run the Vitest suite once (no build, Firefox or network; temp dirs under `/tmp` only). `npm run test:watch` for watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).

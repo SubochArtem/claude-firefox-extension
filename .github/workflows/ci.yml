@@ -43,6 +43,8 @@ jobs:
       - run: npm run build
       - run: npm run lint
       - run: npm test
+      - run: npm run build:binary
+      - run: npm run smoke:binary
 
   e2e:
     name: e2e (${{ matrix.os }})

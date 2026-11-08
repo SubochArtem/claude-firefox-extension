@@ -221,6 +221,16 @@ If writing or registration fails, files that existed before the run get their pr
 - Setup states: without a saved API key the sidebar shows a note and an "Open options" button (`runtime.openOptionsPage`); with a key but without `https://api.anthropic.com/*` it shows "Grant access", whose click handler calls `permissions.request` before anything is awaited (it needs the user gesture). The state is re-checked on `storage.local` changes of `chatSettings` and on `permissions.onAdded`/`onRemoved`; the input is disabled until both are in place.
 - Display: user messages as plain text; assistant text through the Markdown renderer, re-rendered on every streamed delta. Each tool call is a compact line with the tool name and its input on one line, clipped to 120 characters; its result (text joined, images shown as `[screenshot]`, never decoded) is clipped to 2,000 characters in a collapsed `<details>`, marked as an error when the tool failed. A retry adds a "Retrying in N s" note and drops the failed attempt's partial text; API errors (with a hint to check the key on 401), `max_tokens`, the turn cap, other stop reasons and a stop are shown as notes.
 
+## Packaging
+
+End users install the native host without Node.js (`feature/packaging`).
+
+- Format: the host is shipped as a Node.js single executable application (SEA): one binary per OS and architecture, built from the host bundle without a new runtime or bundler. Later parts of the feature: the binary installs and uninstalls itself (`install`/`uninstall` subcommands), and releases are published on GitHub Releases. Binaries are not code-signed for now; the macOS Gatekeeper and Windows SmartScreen workaround is documented with the releases.
+- Bundle: a SEA runs only a CommonJS main script, so `npm run build` also writes `dist/host/sea.cjs`, the same host bundled as CommonJS; `host/index.ts` has no top-level await for that reason. In a SEA `process.argv` has the same layout as under `node index.js` (the executable twice, then the arguments), so the `--native-host`/`--mcp` dispatch is unchanged; `node:sea` `isSea()` only picks the program name in the usage text.
+- Build: `npm run build:binary` (`scripts/build-binary.mjs`, pure parts in `scripts/build-binary-lib.mjs`) turns `dist/host/sea.cjs` into `dist/bin/claude-firefox-host` (`.exe` on Windows) for the platform and Node binary it runs on, with the experimental SEA warning disabled and without a snapshot or code cache. When `node --help` lists `--build-sea` it runs `node --build-sea`; otherwise (Node 24, used in CI) it writes the preparation blob with `--experimental-sea-config` and injects it into a copy of node with `postject` (devDependency). On macOS the signature is removed before injection and the binary is signed ad hoc (`codesign --sign -`) afterwards; on Windows the binary stays unsigned. Intermediate files go to `dist/sea/`.
+- The binary embeds the Node binary it was built with: a Node built against shared system libraries (as some Linux distributions ship it) gives a binary that depends on those libraries, so release binaries are built with the official Node builds. postject was seen to produce a crashing binary from such a distribution Node; `--build-sea` worked there.
+- CI: every OS runs `npm run build:binary` and `npm run smoke:binary` (`scripts/smoke-binary.mjs`): the binary without arguments prints the usage and exits with 1, and as `--mcp` answers an MCP `initialize` over stdio without a SEA warning on stderr and exits with 0 when stdin closes; every run is limited to 30 s.
+
 ## Native host installation paths
 
 `npm run install-host` writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary, and the manifest `claude_firefox_extension.json`:
@@ -246,11 +256,11 @@ TDD where it fits: logic with a spec known up front (protocols, framing, multipl
 - `extension/test/`: unit tests with a mocked `browser` global (`browser-mock.ts`); not copied into `dist`. `manifest.test.ts` checks the permissions the tools need.
 - `host/test/`: unit tests, process tests against the bundled host, in-process timeout tests with fake timers. `helpers.ts` provides temp dirs under `/tmp`, endpoints as Unix sockets or Windows pipes from `bridge.json`, a fake extension and a bridge client; `global-setup.ts` bundles the host.
 - `shared/test/`: tests of the shared tool definitions.
-- `scripts/test/`: installer tests (run a copy of the installer against a temp `HOME`), e2e safety tests and build-time module tests.
+- `scripts/test/`: installer tests (run a copy of the installer against a temp `HOME`), e2e safety tests, build-time module tests and single executable build plan tests.
 
 ## CI
 
-`.github/workflows/ci.yml` runs GitHub Actions on Linux, Windows and macOS (Node 24): `npm ci`, typecheck, build, lint, test. Then an e2e job per OS (needs test): installs the current Firefox release from Mozilla's official downloads into `RUNNER_TEMP`, prints its version, `npm ci`, build, `npm run e2e` with `E2E_FIREFOX`.
+`.github/workflows/ci.yml` runs GitHub Actions on Linux, Windows and macOS (Node 24): `npm ci`, typecheck, build, lint, test, then the single executable build and its smoke check (see [Packaging](#packaging)). Then an e2e job per OS (needs test): installs the current Firefox release from Mozilla's official downloads into `RUNNER_TEMP`, prints its version, `npm ci`, build, `npm run e2e` with `E2E_FIREFOX`.
 
 ## E2E
 
