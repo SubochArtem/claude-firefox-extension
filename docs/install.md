@@ -15,7 +15,7 @@ Open the latest release on the repository's Releases page and download the nativ
 | Windows x64 | `claude-firefox-host-windows-x64.exe` |
 | Extension (all systems) | `claude-firefox-extension-<version>.xpi` |
 
-Optionally check the downloads against `SHA256SUMS` from the same release (`sha256sum -c SHA256SUMS --ignore-missing` on Linux, `shasum -a 256 -c SHA256SUMS --ignore-missing` on macOS, `Get-FileHash <file>` in PowerShell on Windows).
+Optionally check the downloads against `SHA256SUMS` from the same release (`sha256sum -c SHA256SUMS --ignore-missing` on Linux, `shasum -a 256 -c SHA256SUMS --ignore-missing` on macOS, on Windows in PowerShell `(Get-FileHash <file>).Hash.ToLower()`, which must equal the hash on the file's line in `SHA256SUMS`).
 
 ## 2. Allow the binary to run
 
@@ -77,7 +77,7 @@ Firefox then shows a robot icon and a striped address bar. To use another port, 
 
 ## 7. Grant access to websites
 
-Screenshots and page tools need the extension's access to all websites. In `about:addons`, open the extension, go to the Permissions tab and turn on "Access your data for all websites". A temporary install from `about:debugging` gets it granted already.
+Screenshots and page tools need the extension's access to all websites. In `about:addons`, open the extension, go to the Permissions tab and turn on "Access your data for all websites". Check this for a temporary install from `about:debugging` too and turn it on if it is off.
 
 The extension still asks before acting on each site: Claude Code shows the question, or Firefox opens a small prompt window.
 

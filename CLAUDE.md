@@ -84,7 +84,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 CLAUDE.md
 .gitignore
 .github/workflows/ci.yml  CI on Linux, Windows, macOS: typecheck, build, lint, test, single executable build and smoke check, then e2e in real Firefox through the self-installed binary (docs/decisions.md#ci)
-.github/workflows/release.yml  release on a pushed v* tag: host binary per OS and architecture, unsigned extension package, SHA256SUMS, GitHub release; manual run is a dry run with workflow artifacts only (docs/decisions.md#packaging)
+.github/workflows/release.yml  release on a pushed v* tag: host binary per OS and architecture, unsigned extension package, SHA256SUMS, GitHub release after checking the tag against the versions and main; a manual run or a pull request touching the release files is a dry run with workflow artifacts only (docs/decisions.md#packaging)
 docs/
   decisions.md         design details: bridge protocol, Windows installer, threat model, tests, CI, e2e
   install.md           end-user install guide: download, Gatekeeper and SmartScreen, install, claude mcp add, loading the extension, remote debugging, upgrade, uninstall

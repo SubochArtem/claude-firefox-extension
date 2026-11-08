@@ -5,6 +5,7 @@
 export const CHECKSUM_FILE = 'SHA256SUMS';
 const BINARY_PREFIX = 'claude-firefox-host';
 const EXTENSION_PREFIX = 'claude-firefox-extension';
+const VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 
 /** @type {readonly Target[]} */
 export const TARGETS = [
@@ -48,9 +49,8 @@ export function releaseAssetNames(version) {
  * @param {{ packageVersion: string, manifestVersion: string }} versions
  */
 export function releaseVersion(tag, versions) {
-  const match = /^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))$/.exec(tag);
-  if (match?.[1] === undefined) throw new Error(`Tag ${JSON.stringify(tag)} is not of the form vX.Y.Z`);
-  const version = match[1];
+  const version = tag.startsWith('v') ? tag.slice(1) : '';
+  if (!VERSION.test(version)) throw new Error(`Tag ${JSON.stringify(tag)} is not of the form vX.Y.Z`);
   if (versions.packageVersion !== version) {
     throw new Error(`Tag ${tag} does not match the version ${versions.packageVersion} in src/package.json`);
   }
@@ -95,6 +95,7 @@ export function checksumFile(entries) {
  * @param {string} repository `owner/name` on GitHub
  */
 export function releaseNotes(version, repository) {
+  if (!VERSION.test(version)) throw new Error(`Version ${JSON.stringify(version)} is not of the form X.Y.Z`);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) {
     throw new Error(`Invalid repository ${JSON.stringify(repository)}`);
   }

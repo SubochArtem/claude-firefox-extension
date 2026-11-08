@@ -154,6 +154,14 @@ describe('releaseNotes', () => {
     expect(notes).toContain('SHA256SUMS');
   });
 
+  it('refuses a version that is not X.Y.Z', () => {
+    for (const version of ['', 'v0.1.0', '0.1', '0.1.0-beta.1', '01.1.0', '0.1.0\n', '0.1.0/../x']) {
+      expect(() => releaseNotes(version, 'owner/repo')).toThrow(
+        `Version ${JSON.stringify(version)} is not of the form X.Y.Z`,
+      );
+    }
+  });
+
   it('refuses a repository that is not owner/name', () => {
     for (const repository of ['', 'owner', 'owner/repo/extra', 'owner/re po']) {
       expect(() => releaseNotes('0.1.0', repository)).toThrow(`Invalid repository ${JSON.stringify(repository)}`);
