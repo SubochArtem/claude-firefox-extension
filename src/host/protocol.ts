@@ -122,13 +122,93 @@ export type BidiEvaluateResponse =
   | { type: 'bidi_evaluate_response'; requestId: string; ok: true; exception: string }
   | { type: 'bidi_evaluate_response'; requestId: string; ok: false; error: string; unavailable?: true };
 
-export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest | BidiEvaluateRequest;
+export const MAX_CHAT_SESSION_ID_LENGTH = 128;
+export const MAX_CHAT_MODEL_LENGTH = 128;
+export const MAX_CHAT_SYSTEM_PROMPT_LENGTH = 100_000;
+export const MAX_CHAT_CONTENT_BLOCKS = 100;
+const CHAT_SESSION_ID = /^[A-Za-z0-9_-]+$/;
+// A model alias or full name; never starting with '-', so the CLI cannot read it as an option.
+const CHAT_MODEL = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]*$/;
+const CHAT_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const;
+
+export type ChatImageMediaType = (typeof CHAT_IMAGE_TYPES)[number];
+export type ChatContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: ChatImageMediaType; data: string } };
+
+// Starts a local Claude Code session; it ends with exactly one chat_closed.
+export interface ChatStart {
+  type: 'chat_start';
+  sessionId: string;
+  model?: string;
+  appendSystemPrompt?: string;
+}
+
+export interface ChatSend {
+  type: 'chat_send';
+  sessionId: string;
+  content: string | ChatContentBlock[];
+}
+
+export interface ChatInterrupt {
+  type: 'chat_interrupt';
+  sessionId: string;
+}
+
+export interface ChatClose {
+  type: 'chat_close';
+  sessionId: string;
+}
+
+export type ChatRequest = ChatStart | ChatSend | ChatInterrupt | ChatClose;
+
+// One stream-json event of the session's claude process. `reduced` is set when large parts were
+// replaced with markers to keep the message under the native messaging limit.
+export interface ChatEvent {
+  type: 'chat_event';
+  sessionId: string;
+  event: Record<string, unknown>;
+  reduced?: true;
+}
+
+export type ChatErrorCode =
+  | 'invalid_request'
+  | 'unknown_session'
+  | 'too_many_sessions'
+  | 'claude_not_found'
+  | 'claude_too_old'
+  | 'not_logged_in'
+  | 'spawn_failed'
+  | 'exited';
+
+export interface ChatError {
+  type: 'chat_error';
+  sessionId: string;
+  code: ChatErrorCode;
+  message: string;
+}
+
+export interface ChatClosed {
+  type: 'chat_closed';
+  sessionId: string;
+}
+
+export type ExtensionToHostMessage =
+  | { type: 'ping' }
+  | ToolResponse
+  | PermissionRequest
+  | BidiInputRequest
+  | BidiEvaluateRequest
+  | ChatRequest;
 export type HostToExtensionMessage =
   | { type: 'pong' }
   | ToolRequest
   | PermissionResponse
   | BidiInputResponse
-  | BidiEvaluateResponse;
+  | BidiEvaluateResponse
+  | ChatEvent
+  | ChatError
+  | ChatClosed;
 
 export function textOutput(text: string): ToolOutput {
   return { content: [{ type: 'text', text }] };
@@ -233,8 +313,71 @@ export function parseBidiEvaluateRequest(value: unknown): BidiEvaluateRequest | 
   return { type: 'bidi_evaluate_request', requestId, marker, url, code };
 }
 
+export function isChatSessionId(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0 && value.length <= MAX_CHAT_SESSION_ID_LENGTH && CHAT_SESSION_ID.test(value);
+}
+
+function parseChatContentBlock(value: unknown): ChatContentBlock | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value['type'] === 'text') {
+    const text = value['text'];
+    return typeof text === 'string' && text.length > 0 ? { type: 'text', text } : undefined;
+  }
+  if (value['type'] !== 'image') return undefined;
+  const source = value['source'];
+  if (!isRecord(source) || source['type'] !== 'base64') return undefined;
+  const { media_type: mediaType, data } = source;
+  if (!CHAT_IMAGE_TYPES.some((type) => type === mediaType) || typeof data !== 'string' || data.length === 0) return undefined;
+  return { type: 'image', source: { type: 'base64', media_type: mediaType as ChatImageMediaType, data } };
+}
+
+function parseChatContent(value: unknown): string | ChatContentBlock[] | undefined {
+  if (typeof value === 'string') return value.length > 0 ? value : undefined;
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_CHAT_CONTENT_BLOCKS) return undefined;
+  const blocks: ChatContentBlock[] = [];
+  for (const item of value) {
+    const block = parseChatContentBlock(item);
+    if (!block) return undefined;
+    blocks.push(block);
+  }
+  return blocks;
+}
+
+export function parseChatRequest(value: unknown): ChatRequest | undefined {
+  if (!isRecord(value)) return undefined;
+  const { type, sessionId } = value;
+  if (!isChatSessionId(sessionId)) return undefined;
+  if (type === 'chat_interrupt' || type === 'chat_close') return { type, sessionId };
+  if (type === 'chat_send') {
+    const content = parseChatContent(value['content']);
+    return content === undefined ? undefined : { type, sessionId, content };
+  }
+  if (type !== 'chat_start') return undefined;
+  const { model, appendSystemPrompt } = value;
+  if (model !== undefined && (typeof model !== 'string' || model.length > MAX_CHAT_MODEL_LENGTH || !CHAT_MODEL.test(model))) {
+    return undefined;
+  }
+  if (
+    appendSystemPrompt !== undefined &&
+    (typeof appendSystemPrompt !== 'string' || appendSystemPrompt.length > MAX_CHAT_SYSTEM_PROMPT_LENGTH)
+  ) {
+    return undefined;
+  }
+  return {
+    type,
+    sessionId,
+    ...(model === undefined ? {} : { model }),
+    ...(appendSystemPrompt === undefined || appendSystemPrompt === '' ? {} : { appendSystemPrompt }),
+  };
+}
+
+export function isChatRequestType(value: unknown): boolean {
+  return isRecord(value) && typeof value['type'] === 'string' && value['type'].startsWith('chat_');
+}
+
 export function parseExtensionMessage(value: unknown): ExtensionToHostMessage | undefined {
   if (isRecord(value) && value['type'] === 'ping') return { type: 'ping' };
+  if (isChatRequestType(value)) return parseChatRequest(value);
   if (isRecord(value) && value['type'] === 'permission_request') return parsePermissionRequest(value);
   if (isRecord(value) && value['type'] === 'bidi_input_request') return parseBidiInputRequest(value);
   if (isRecord(value) && value['type'] === 'bidi_evaluate_request') return parseBidiEvaluateRequest(value);

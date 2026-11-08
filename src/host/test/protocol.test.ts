@@ -8,7 +8,11 @@ import {
   parseBidiEvaluateRequest,
   parseBidiInputRequest,
   errorResponse,
+  MAX_CHAT_CONTENT_BLOCKS,
+  MAX_CHAT_SESSION_ID_LENGTH,
+  MAX_CHAT_SYSTEM_PROMPT_LENGTH,
   MAX_PERMISSION_FIELD_LENGTH,
+  parseChatRequest,
   parseExtensionMessage,
   parsePermissionRequest,
   parsePermissionResponse,
@@ -277,5 +281,58 @@ describe('parseBidiEvaluateRequest', () => {
     ['too long code', { ...valid, code: 'x'.repeat(MAX_BIDI_EVALUATE_CODE_LENGTH + 1) }],
   ])('rejects %s', (_label, value) => {
     expect(parseBidiEvaluateRequest(value)).toBeUndefined();
+  });
+});
+
+describe('parseChatRequest', () => {
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBOR' } };
+
+  it('accepts chat_start with optional model and system prompt and drops unknown fields', () => {
+    expect(parseChatRequest({ type: 'chat_start', sessionId: 'a-1_B', extra: 1 })).toEqual({ type: 'chat_start', sessionId: 'a-1_B' });
+    expect(
+      parseChatRequest({ type: 'chat_start', sessionId: 's', model: 'claude-opus-5-5[1m]', appendSystemPrompt: 'Be brief.' }),
+    ).toEqual({ type: 'chat_start', sessionId: 's', model: 'claude-opus-5-5[1m]', appendSystemPrompt: 'Be brief.' });
+    expect(parseChatRequest({ type: 'chat_start', sessionId: 's', appendSystemPrompt: '' })).toEqual({ type: 'chat_start', sessionId: 's' });
+  });
+
+  it('accepts chat_send with text or text and image blocks', () => {
+    expect(parseChatRequest({ type: 'chat_send', sessionId: 's', content: 'hi' })).toEqual({ type: 'chat_send', sessionId: 's', content: 'hi' });
+    const content = [{ type: 'text', text: 'look' }, image];
+    expect(parseChatRequest({ type: 'chat_send', sessionId: 's', content })).toEqual({ type: 'chat_send', sessionId: 's', content });
+  });
+
+  it('accepts chat_interrupt and chat_close', () => {
+    expect(parseChatRequest({ type: 'chat_interrupt', sessionId: 's' })).toEqual({ type: 'chat_interrupt', sessionId: 's' });
+    expect(parseExtensionMessage({ type: 'chat_close', sessionId: 's' })).toEqual({ type: 'chat_close', sessionId: 's' });
+  });
+
+  it('accepts the size limits exactly', () => {
+    const sessionId = 's'.repeat(MAX_CHAT_SESSION_ID_LENGTH);
+    expect(parseChatRequest({ type: 'chat_close', sessionId })).toBeDefined();
+    expect(parseChatRequest({ type: 'chat_close', sessionId: `${sessionId}s` })).toBeUndefined();
+    const prompt = 'p'.repeat(MAX_CHAT_SYSTEM_PROMPT_LENGTH);
+    expect(parseChatRequest({ type: 'chat_start', sessionId: 's', appendSystemPrompt: prompt })).toBeDefined();
+    expect(parseChatRequest({ type: 'chat_start', sessionId: 's', appendSystemPrompt: `${prompt}p` })).toBeUndefined();
+    const blocks = Array.from({ length: MAX_CHAT_CONTENT_BLOCKS }, () => ({ type: 'text', text: 'x' }));
+    expect(parseChatRequest({ type: 'chat_send', sessionId: 's', content: blocks })).toBeDefined();
+    expect(parseChatRequest({ type: 'chat_send', sessionId: 's', content: [...blocks, { type: 'text', text: 'x' }] })).toBeUndefined();
+  });
+
+  it.each([
+    ['an unknown chat type', { type: 'chat_resume', sessionId: 's' }],
+    ['a missing session id', { type: 'chat_close' }],
+    ['a session id with spaces', { type: 'chat_close', sessionId: 'a b' }],
+    ['a model starting with a dash', { type: 'chat_start', sessionId: 's', model: '--bare' }],
+    ['a model with spaces', { type: 'chat_start', sessionId: 's', model: 'a b' }],
+    ['a non-string system prompt', { type: 'chat_start', sessionId: 's', appendSystemPrompt: 1 }],
+    ['empty content', { type: 'chat_send', sessionId: 's', content: '' }],
+    ['no blocks', { type: 'chat_send', sessionId: 's', content: [] }],
+    ['an empty text block', { type: 'chat_send', sessionId: 's', content: [{ type: 'text', text: '' }] }],
+    ['a tool_result block', { type: 'chat_send', sessionId: 's', content: [{ type: 'tool_result', tool_use_id: 't' }] }],
+    ['an image of another type', { type: 'chat_send', sessionId: 's', content: [{ ...image, source: { ...image.source, media_type: 'image/svg+xml' } }] }],
+    ['an image by URL', { type: 'chat_send', sessionId: 's', content: [{ type: 'image', source: { type: 'url', url: 'https://x' } }] }],
+  ])('rejects %s', (_label, value) => {
+    expect(parseChatRequest(value)).toBeUndefined();
+    expect(parseExtensionMessage(value)).toBeUndefined();
   });
 });

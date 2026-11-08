@@ -3,7 +3,7 @@ import type { Readable, Writable } from 'node:stream';
 
 const HEADER_BYTES = 4;
 // Firefox drops the host when a single host-to-extension message exceeds 1 MB.
-const MAX_OUTGOING_BYTES = 1024 * 1024;
+export const MAX_OUTGOING_BYTES = 1024 * 1024;
 const MAX_INCOMING_BYTES = 64 * 1024 * 1024;
 const littleEndian = endianness() === 'LE';
 

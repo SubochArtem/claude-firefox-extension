@@ -1,6 +1,7 @@
 import { lstatSync, rmSync } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import { createConnection, createServer, type Server, type Socket } from 'node:net';
+import { homedir } from 'node:os';
 import {
   bridgeInfoDir,
   newBridgeInfo,
@@ -14,6 +15,8 @@ import { BidiError, BidiUnavailableError, bidiPort } from './bidi-client';
 import { runBidiEvaluate } from './bidi-evaluate';
 import { runBidiInput } from './bidi-input';
 import { createSerialQueue } from './bidi-session';
+import { createChatSessions, type ChatSessions } from './chat-sessions';
+import { chatWorkDir, locateClaude, mcpServerConfig, prepareChatWorkDir } from './claude-cli';
 import {
   clientProof,
   createNonce,
@@ -26,6 +29,7 @@ import {
 } from './handshake';
 import { isAuthenticatedHostAlive } from './host-probe';
 import { MAX_LINE_BYTES, readJsonLines, writeJsonLine } from './json-lines';
+import type { HostSource } from './install/paths';
 import { listen, listenWithRetry } from './listen';
 import { readNativeMessages, writeNativeMessage } from './native-messaging';
 import {
@@ -36,6 +40,8 @@ import {
   type BidiInputResponse,
   denyPermission,
   errorResponse,
+  isChatRequestType,
+  isChatSessionId,
   isRecord,
   MAX_PERMISSION_FIELD_LENGTH,
   parseExtensionMessage,
@@ -105,6 +111,7 @@ const earlyExtensionMessages: unknown[] = [];
 let socketIdentity: SocketIdentity | undefined;
 // Undefined until this process has bound its endpoint and generated the secret for bridge.json.
 let bridgeInfo: BridgeInfo | undefined;
+let chatSessions: ChatSessions | undefined;
 
 function isSocketAlive(path: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -345,11 +352,19 @@ function rejectInvalidBidiRequest(message: unknown): void {
   }
 }
 
+function rejectInvalidChatRequest(message: unknown): void {
+  if (!isChatRequestType(message)) return;
+  const sessionId = (message as Record<string, unknown>)['sessionId'];
+  if (!isChatSessionId(sessionId)) return;
+  sendToExtension({ type: 'chat_error', sessionId, code: 'invalid_request', message: 'The extension sent an invalid chat request' });
+}
+
 function handleExtensionMessage(message: unknown): void {
   const parsed = parseExtensionMessage(message);
   if (!parsed) {
     console.error(`${LOG} extension sent an invalid message`);
     rejectInvalidBidiRequest(message);
+    rejectInvalidChatRequest(message);
     return;
   }
   if (parsed.type === 'ping') {
@@ -366,6 +381,10 @@ function handleExtensionMessage(message: unknown): void {
   }
   if (parsed.type === 'bidi_evaluate_request') {
     void performBidiEvaluate(parsed).then(sendToExtension);
+    return;
+  }
+  if (parsed.type !== 'tool_response') {
+    chatSessions?.handle(parsed);
     return;
   }
   const entry = pending.get(parsed.id);
@@ -421,6 +440,7 @@ function shutdown(server: Server, socketPath: string | undefined, reason: string
   for (const client of clients.values()) client.socket.end();
   for (const socket of unauthenticated) socket.destroy();
   bidiShutdown.abort();
+  chatSessions?.closeAll();
   setTimeout(() => exitAfterBidiRequest(0), SHUTDOWN_GRACE_MS).unref();
   // libuv unlinks the listening path on close without checking what it points to. If another
   // host has replaced the socket file, skip close() and let the grace timer end the process.
@@ -428,7 +448,21 @@ function shutdown(server: Server, socketPath: string | undefined, reason: string
   else if (!server.listening) exitAfterBidiRequest(0);
 }
 
-export async function runNativeHost(): Promise<void> {
+function createHostChatSessions(source: HostSource): ChatSessions {
+  const home = homedir();
+  return createChatSessions({
+    send: (message) => {
+      sendToExtension(message);
+    },
+    locate: () => locateClaude({ platform: process.platform, env: process.env, home }),
+    env: process.env,
+    workDir: () => prepareChatWorkDir(chatWorkDir(process.platform, process.env, home)),
+    mcpConfig: mcpServerConfig(source),
+  });
+}
+
+export async function runNativeHost(source: HostSource): Promise<void> {
+  chatSessions = createHostChatSessions(source);
   await prepareBridgeSocketDir();
   if (isWindows) await mkdir(bridgeInfoDir(), { recursive: true });
   // A Unix socket path is fixed up front; a Windows pipe gets a random name when it is bound.
@@ -438,6 +472,7 @@ export async function runNativeHost(): Promise<void> {
   // server.close() unlinks the socket, but process.exit() and crashes skip it. A newer host may
   // own the path and bridge.json by then, so only what this process created is removed.
   process.on('exit', () => {
+    chatSessions?.killAll();
     if (bridgeInfo) removeBridgeInfoIfOwn(bridgeInfo);
     removeBridgeInfoTempFiles();
     if (socketPath && socketIdentity && isOwnSocket(socketPath, socketIdentity)) rmSync(socketPath, { force: true });
