@@ -17,6 +17,7 @@ const entryPoints = [
   'background.ts',
   'permissions/prompt.ts',
   'options/options.ts',
+  'sidebar/sidebar.ts',
   'page/read-page.ts',
   'page/page-text.ts',
   'page/console-capture.ts',
