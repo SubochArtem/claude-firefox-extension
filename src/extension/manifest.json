@@ -20,6 +20,12 @@
   ],
   "host_permissions": ["<all_urls>"],
   "optional_host_permissions": ["https://api.anthropic.com/*"],
+  "sidebar_action": {
+    "default_panel": "sidebar/sidebar.html",
+    "default_title": "Claude",
+    "default_icon": "icons/icon.svg",
+    "open_at_install": false
+  },
   "options_ui": {
     "page": "options/options.html"
   },

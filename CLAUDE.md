@@ -72,7 +72,9 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/accessibility-tree`: DOM-based tree with `ref_N` references; `read_page`, `find`, `get_page_text`.
 - [x] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
 - [x] `feature/devtools-tools`: `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`.
-- [ ] `feature/sidebar-chat`: chat in a Firefox sidebar; options decided at its start after checking Anthropic's terms: a sidebar that talks to the user's local Claude Code through the native host (user signs in to Claude Code as usual), or direct Anthropic API calls with the user's API key. Signing in to claude.ai from the extension like Claude in Chrome is not available to third parties.
+- [x] `feature/sidebar-chat`: chat in a Firefox sidebar; options decided at its start after checking Anthropic's terms: a sidebar that talks to the user's local Claude Code through the native host (user signs in to Claude Code as usual), or direct Anthropic API calls with the user's API key. Signing in to claude.ai from the extension like Claude in Chrome is not available to third parties.
+- [ ] `feature/sidebar-claude-code`: the sidebar talks to the user's local Claude Code through the native host; driving a subscription-logged `claude -p` needs Anthropic's written confirmation first.
+- [ ] `feature/openai-provider`: an OpenAI-compatible `ChatProvider` for the sidebar chat.
 - [ ] `feature/packaging`: installation without Node.js for end users: a native host executable and an installer per OS.
 
 ## Repository layout
@@ -121,6 +123,9 @@ src/                   npm package root; every command is run from here
       options-messages.ts  background handler for revoke requests from the options page
     sidebar/           sidebar chat
       markdown.ts      Markdown renderer for chat messages built with createElement/textContent only: paragraphs, headings, emphasis, code spans and fences (unclosed fence renders as code), lists with one nested level, blockquotes, rules, http(s)/mailto links and bare URLs, anything else as literal text
+      sidebar.html, sidebar.css, sidebar.ts  the sidebar chat page (sidebar_action): DOM binding of the session, setup panel (Open options, Grant access), message list, Enter to send, Stop, New chat; follows the light/dark theme
+      chat-session.ts  conversation state without browser.* calls: history (a prompt after a trailing user message joins it), running state, agent loop events to view items (streamed text, tool lines with clipped input and results, retry and error notes)
+      setup-state.ts   setup state from the saved key and the api.anthropic.com grant: needs key, needs access, ready
       sidebar-messages.ts  background handler for the sidebar's tool calls: sender check (sidebar page only), tool registry with the popup prompt and the native port's BiDi channels, results as text and image blocks
     page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
@@ -235,3 +240,4 @@ Run every command from `src/` (`cd src && npm run build`).
 - `npm run uninstall-host`: remove the manifest and the wrapper (and the registry key on Windows).
 - `npm run e2e`: end-to-end check in a real headless Firefox (build first); changes the host registration, so it runs only with `CI=true|1` or `--force`, and a local `--force` run is Linux only inside a temporary `HOME` and `XDG_RUNTIME_DIR` under `/tmp` ([E2E](docs/decisions.md#e2e)). `E2E_FIREFOX` overrides the Firefox binary. Example: `RT=$(mktemp -d /tmp/cfe-rt-XXXX); H=$(mktemp -d /tmp/cfe-home-XXXX); HOME=$H XDG_RUNTIME_DIR=$RT npm run e2e -- --force`.
 - `claude mcp add firefox -- '<node>' '<abs path>/src/dist/host/index.js' --mcp` (double quotes on Windows): register the MCP server with Claude Code, once, using the exact command printed by `npm run install-host`.
+- Using the sidebar chat: open the extension's options page in `about:addons`, save an Anthropic API key (and pick a model), click "Grant access" for api.anthropic.com (the sidebar offers the same button), then open the "Claude" sidebar (View > Sidebar, or the sidebar button). The chat acts on the active tab of the sidebar's window; site permissions are asked in a popup.

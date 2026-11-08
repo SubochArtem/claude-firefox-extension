@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Claude</title>
+    <link rel="stylesheet" href="sidebar.css" />
+  </head>
+  <body>
+    <header>
+      <button id="new-chat" type="button">New chat</button>
+      <button id="stop" type="button" disabled>Stop</button>
+    </header>
+    <section id="setup" hidden>
+      <p id="setup-text"></p>
+      <button id="open-options" type="button" hidden>Open options</button>
+      <button id="grant-access" type="button" hidden>Grant access</button>
+    </section>
+    <main id="messages" aria-live="polite"></main>
+    <footer>
+      <textarea id="prompt" rows="3" placeholder="Ask Claude to do something in this window. Enter sends, Shift+Enter adds a line." disabled></textarea>
+    </footer>
+    <script src="sidebar.js"></script>
+  </body>
+</html>

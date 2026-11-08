@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import manifest from '../manifest.json';
+import { SIDEBAR_PAGE } from '../sidebar/sidebar-messages';
 
 describe('manifest', () => {
   it('declares the webNavigation permission that navigate needs', () => {
@@ -29,6 +30,15 @@ describe('manifest', () => {
 
   it('points the options page at the built options page', () => {
     expect(manifest.options_ui).toEqual({ page: 'options/options.html' });
+  });
+
+  it('declares the sidebar chat panel at the built sidebar page that the background accepts tool calls from', () => {
+    expect(manifest.sidebar_action).toEqual({
+      default_panel: SIDEBAR_PAGE,
+      default_title: 'Claude',
+      default_icon: 'icons/icon.svg',
+      open_at_install: false,
+    });
   });
 
   it('requests access to all websites, which tabs.captureTab requires', () => {
