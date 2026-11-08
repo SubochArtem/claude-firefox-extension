@@ -1,14 +1,16 @@
 import { execFile, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
-import { bridgeInfoDir } from '../../host/bridge-info';
-import { NATIVE_HOST_NAME } from '../../host/protocol';
+import { bridgeInfoDir } from '../bridge-info';
+import { nodeFileOps, type FileOps } from '../install/files';
+import { mcpAddCommand } from '../install/messages';
+import { installPaths, type HostSource, type InstallPaths } from '../install/paths';
 import {
   execFileRunner,
   icaclsArgs,
@@ -19,29 +21,20 @@ import {
   regQueryArgs,
   renderBatWrapper,
   uninstallWindows,
-  windowsInstallPaths,
-  windowsMcpAddHint,
   windowsPathWarnings,
   windowsToolPath,
-} from '../install-host-lib.mjs';
+  type Runner,
+  type RunResult,
+} from '../install/windows';
+import { NATIVE_HOST_NAME } from '../protocol';
+import { hostEntry as bundledHost } from './helpers';
 
-interface RunResult {
-  stdout: string;
-  stderr: string;
-}
-type Runner = (file: string, args: string[]) => Promise<RunResult>;
 interface Call {
   file: string;
   args: string[];
 }
-interface InstallPaths {
-  dir: string;
-  wrapperPath: string;
-  manifestPath: string;
-}
 
 const run = promisify(execFile);
-const scriptsDir = fileURLToPath(new URL('..', import.meta.url));
 const extensionId = (
   JSON.parse(readFileSync(fileURLToPath(new URL('../../extension/manifest.json', import.meta.url)), 'utf8')) as {
     browser_specific_settings: { gecko: { id: string } };
@@ -87,7 +80,7 @@ async function tempBase(): Promise<string> {
   return base;
 }
 
-describe('windowsInstallPaths', () => {
+describe('installPaths on Windows', () => {
   const cases: [string, Record<string, string | undefined>, string, string][] = [
     ['LOCALAPPDATA', { LOCALAPPDATA: 'C:\\Users\\anna\\AppData\\Local' }, 'C:\\Users\\other', 'C:\\Users\\anna\\AppData\\Local'],
     ['LOCALAPPDATA in any case', { LocalAppData: 'D:\\Local' }, 'C:\\Users\\anna', 'D:\\Local'],
@@ -97,15 +90,16 @@ describe('windowsInstallPaths', () => {
 
   it.each(cases)('uses %s', (_name, env, home, localAppData) => {
     const dir = `${localAppData}\\claude-firefox-extension`;
-    expect(windowsInstallPaths(env, home)).toEqual({
+    expect(installPaths('win32', env, home)).toEqual({
       dir,
+      binaryPath: `${dir}\\claude-firefox-host.exe`,
       wrapperPath: `${dir}\\native-host.bat`,
       manifestPath: `${dir}\\claude_firefox_extension.json`,
     });
   });
 
   it.each(cases)('installs into the bridge info directory with %s', (_name, env, home) => {
-    expect(windowsInstallPaths(env, home).dir).toBe(bridgeInfoDir({ platform: 'win32', env, homedir: home }));
+    expect(installPaths('win32', env, home).dir).toBe(bridgeInfoDir({ platform: 'win32', env, homedir: home }));
   });
 });
 
@@ -244,10 +238,19 @@ describe('parseWhoamiUserCsv', () => {
   });
 });
 
-describe('windowsMcpAddHint', () => {
-  it('quotes both paths with double quotes', () => {
-    expect(windowsMcpAddHint(NODE, 'C:\\Users\\Анна\\my pkg\\src\\dist\\host\\index.js')).toBe(
-      `claude mcp add firefox -- "${NODE}" "C:\\Users\\Анна\\my pkg\\src\\dist\\host\\index.js" --mcp`,
+describe('mcpAddCommand on Windows', () => {
+  const paths = installPaths('win32', { LOCALAPPDATA: 'C:\\Users\\Анна Б\\AppData\\Local' }, 'C:\\Users\\x');
+
+  it('quotes Node and the build entry with double quotes', () => {
+    const entry = 'C:\\Users\\Анна\\my pkg\\src\\dist\\host\\index.js';
+    expect(mcpAddCommand('win32', { kind: 'node', nodePath: NODE, entry }, paths)).toBe(
+      `claude mcp add firefox -- "${NODE}" "${entry}" --mcp`,
+    );
+  });
+
+  it('names the installed binary, not the one that ran install', () => {
+    expect(mcpAddCommand('win32', { kind: 'binary', executable: 'C:\\Downloads\\claude-firefox-host.exe' }, paths)).toBe(
+      'claude mcp add firefox -- "C:\\Users\\Анна Б\\AppData\\Local\\claude-firefox-extension\\claude-firefox-host.exe" --mcp',
     );
   });
 });
@@ -304,18 +307,48 @@ describe('execFileRunner', () => {
 
 // The install and uninstall flows run on every platform: a fake runner stands in for reg.exe, icacls.exe and
 // whoami.exe, and a temp directory stands in for %LOCALAPPDATA%.
+function testPaths(dir: string): InstallPaths {
+  return {
+    dir,
+    binaryPath: join(dir, 'claude-firefox-host.exe'),
+    wrapperPath: join(dir, 'native-host.bat'),
+    manifestPath: join(dir, 'claude_firefox_extension.json'),
+  };
+}
+
+function inUse(path: string): Error {
+  return Object.assign(new Error(`EPERM: operation not permitted, '${path}'`), { code: 'EPERM', path });
+}
+
+// Windows refuses to overwrite or delete a running executable; renaming it is allowed.
+function runningExecutableOps(path: string, { renameLocked = false } = {}): FileOps {
+  return {
+    copyFile: nodeFileOps.copyFile,
+    rename: async (from, to) => {
+      if (renameLocked && from === path) throw inUse(path);
+      await nodeFileOps.rename(from, to);
+    },
+    rm: async (target, options) => {
+      if (target === path && existsSync(target)) throw inUse(path);
+      await nodeFileOps.rm(target, options);
+    },
+  };
+}
+
 describe('Windows install flow', () => {
   let paths: InstallPaths;
-  let hostEntry: string;
+  let source: HostSource;
 
   beforeEach(async () => {
     const base = await tempBase();
-    const dir = join(base, 'LocalAppData', 'claude-firefox-extension');
-    paths = { dir, wrapperPath: join(dir, 'native-host.bat'), manifestPath: join(dir, 'claude_firefox_extension.json') };
-    hostEntry = join(base, 'pkg', 'dist', 'host', 'index.js');
+    paths = testPaths(join(base, 'LocalAppData', 'claude-firefox-extension'));
+    const hostEntry = join(base, 'pkg', 'dist', 'host', 'index.js');
     await mkdir(join(base, 'pkg', 'dist', 'host'), { recursive: true });
     await writeFile(hostEntry, '');
+    source = { kind: 'node', nodePath: NODE, entry: hostEntry };
   });
+
+  const entry = () => (source.kind === 'node' ? source.entry : '');
 
   function snapshot(call: Call) {
     return {
@@ -332,7 +365,7 @@ describe('Windows install flow', () => {
       seen.push(snapshot(call));
       return { stdout: '', stderr: '' };
     });
-    await installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run });
+    await installWindows({ paths, env: ENV, source, run: runner.run });
 
     expect(runner.calls).toEqual([
       { file: WHOAMI, args: ['/user', '/fo', 'csv', '/nh'] },
@@ -343,7 +376,7 @@ describe('Windows install flow', () => {
       expect.objectContaining({ file: ICACLS, dirExists: true, wrapperExists: false, manifestExists: false }),
       expect.objectContaining({ file: REG, dirExists: true, wrapperExists: true, manifestExists: true }),
     ]);
-    expect(await readFile(paths.wrapperPath, 'utf8')).toBe(renderBatWrapper(NODE, hostEntry));
+    expect(await readFile(paths.wrapperPath, 'utf8')).toBe(renderBatWrapper(NODE, entry()));
     expect(JSON.parse(await readFile(paths.manifestPath, 'utf8'))).toEqual({
       name: NATIVE_HOST_NAME,
       description: 'Claude Firefox Extension native messaging host',
@@ -351,29 +384,30 @@ describe('Windows install flow', () => {
       type: 'stdio',
       allowed_extensions: [extensionId],
     });
+    expect(existsSync(paths.binaryPath)).toBe(false);
   });
 
   it('writes the manifest without a byte order mark', async () => {
-    await installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: fakeRunner().run });
+    await installWindows({ paths, env: ENV, source, run: fakeRunner().run });
     expect((await readFile(paths.manifestPath))[0]).toBe('{'.charCodeAt(0));
   });
 
   it('writes the wrapper and the manifest as UTF-8', async () => {
     const base = await tempBase();
-    const dir = join(base, 'Users', 'Анна', 'AppData', 'Local', 'claude-firefox-extension');
-    paths = { dir, wrapperPath: join(dir, 'native-host.bat'), manifestPath: join(dir, 'claude_firefox_extension.json') };
-    hostEntry = join(base, 'Анна', 'pkg', 'dist', 'host', 'index.js');
+    paths = testPaths(join(base, 'Users', 'Анна', 'AppData', 'Local', 'claude-firefox-extension'));
+    const hostEntry = join(base, 'Анна', 'pkg', 'dist', 'host', 'index.js');
     await mkdir(join(base, 'Анна', 'pkg', 'dist', 'host'), { recursive: true });
     await writeFile(hostEntry, '');
+    source = { kind: 'node', nodePath: NODE, entry: hostEntry };
 
-    await installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: fakeRunner().run });
+    await installWindows({ paths, env: ENV, source, run: fakeRunner().run });
     expect(await readFile(paths.wrapperPath)).toEqual(Buffer.from(renderBatWrapper(NODE, hostEntry), 'utf8'));
     expect(JSON.parse(await readFile(paths.manifestPath, 'utf8'))).toMatchObject({ path: paths.wrapperPath });
   });
 
   it('uses the given host name for the manifest and the registry key', async () => {
     const runner = fakeRunner();
-    await installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run, hostName: 'cfe_test_host' });
+    await installWindows({ paths, env: ENV, source, run: runner.run, hostName: 'cfe_test_host' });
     expect(runner.calls[2]).toEqual({ file: REG, args: regAddArgs(paths.manifestPath, 'cfe_test_host') });
     expect(JSON.parse(await readFile(paths.manifestPath, 'utf8'))).toMatchObject({ name: 'cfe_test_host' });
   });
@@ -382,25 +416,15 @@ describe('Windows install flow', () => {
     await mkdir(paths.dir, { recursive: true });
     await writeFile(paths.wrapperPath, 'old');
     await writeFile(paths.manifestPath, 'old');
-    await installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: fakeRunner().run });
-    expect(await readFile(paths.wrapperPath, 'utf8')).toBe(renderBatWrapper(NODE, hostEntry));
+    await installWindows({ paths, env: ENV, source, run: fakeRunner().run });
+    expect(await readFile(paths.wrapperPath, 'utf8')).toBe(renderBatWrapper(NODE, entry()));
     expect(JSON.parse(await readFile(paths.manifestPath, 'utf8'))).toMatchObject({ path: paths.wrapperPath });
-  });
-
-  it('fails with a clear error and does nothing when the host is not built', async () => {
-    await rm(hostEntry);
-    const runner = fakeRunner();
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run })).rejects.toThrow(
-      `Install failed: ${hostEntry} is missing. Run \`npm run build\` first.`,
-    );
-    expect(runner.calls).toEqual([]);
-    expect(existsSync(paths.dir)).toBe(false);
   });
 
   it('rejects a Node path that cannot be quoted before doing anything', async () => {
     const runner = fakeRunner();
     await expect(
-      installWindows({ paths, env: ENV, nodePath: 'C:\\a"b\\node.exe', hostEntry, run: runner.run }),
+      installWindows({ paths, env: ENV, source: { kind: 'node', nodePath: 'C:\\a"b\\node.exe', entry: entry() }, run: runner.run }),
     ).rejects.toThrow(/unsupported character/);
     expect(runner.calls).toEqual([]);
     expect(existsSync(paths.dir)).toBe(false);
@@ -412,9 +436,7 @@ describe('Windows install flow', () => {
       calls.push({ file, args });
       throw commandFailed('ERROR: whoami broke');
     };
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner })).rejects.toThrow(
-      /^Install failed: .*whoami broke/s,
-    );
+    await expect(installWindows({ paths, env: ENV, source, run: runner })).rejects.toThrow(/^Install failed: .*whoami broke/s);
     expect(calls).toHaveLength(1);
     expect(existsSync(paths.dir)).toBe(false);
   });
@@ -425,9 +447,7 @@ describe('Windows install flow', () => {
       calls.push({ file, args });
       return { stdout: '"corp\\anna"\r\n', stderr: '' };
     };
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner })).rejects.toThrow(
-      /^Install failed: /,
-    );
+    await expect(installWindows({ paths, env: ENV, source, run: runner })).rejects.toThrow(/^Install failed: /);
     expect(calls).toHaveLength(1);
     expect(existsSync(paths.dir)).toBe(false);
   });
@@ -437,7 +457,7 @@ describe('Windows install flow', () => {
       if (call.file === ICACLS) throw commandFailed('Invalid parameter "/inheritance:r"', 87);
       return { stdout: '', stderr: '' };
     });
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run })).rejects.toThrow(
+    await expect(installWindows({ paths, env: ENV, source, run: runner.run })).rejects.toThrow(
       /^Install failed: .*Invalid parameter/s,
     );
     expect(runner.calls.some((call) => call.file === REG)).toBe(false);
@@ -448,9 +468,7 @@ describe('Windows install flow', () => {
   it('fails with a clear error and registers nothing when the manifest cannot be written', async () => {
     await mkdir(paths.manifestPath, { recursive: true });
     const runner = fakeRunner();
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run })).rejects.toThrow(
-      /^Install failed: /,
-    );
+    await expect(installWindows({ paths, env: ENV, source, run: runner.run })).rejects.toThrow(/^Install failed: /);
     expect(runner.calls.some((call) => call.file === REG)).toBe(false);
   });
 
@@ -462,7 +480,7 @@ describe('Windows install flow', () => {
       if (isTool(call, REG, 'add')) throw commandFailed('ERROR: Access is denied.');
       return { stdout: '', stderr: '' };
     });
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run })).rejects.toThrow(
+    await expect(installWindows({ paths, env: ENV, source, run: runner.run })).rejects.toThrow(
       /^Install failed: .*Access is denied\./s,
     );
     expect(existsSync(paths.wrapperPath)).toBe(false);
@@ -483,7 +501,7 @@ describe('Windows install flow', () => {
       if (isTool(call, REG, 'add')) throw commandFailed('ERROR: Access is denied.');
       return { stdout: '', stderr: '' };
     });
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run })).rejects.toThrow(
+    await expect(installWindows({ paths, env: ENV, source, run: runner.run })).rejects.toThrow(
       /^Install failed: .*Access is denied\./s,
     );
     expect(existsSync(paths.wrapperPath) && (await readFile(paths.wrapperPath, 'utf8'))).toBe(hadWrapper && 'old wrapper');
@@ -495,11 +513,134 @@ describe('Windows install flow', () => {
     await writeFile(paths.wrapperPath, 'old wrapper');
     await mkdir(join(paths.manifestPath, 'blocker'), { recursive: true });
     const runner = fakeRunner();
-    await expect(installWindows({ paths, env: ENV, nodePath: NODE, hostEntry, run: runner.run })).rejects.toThrow(
-      /^Install failed: /,
-    );
+    await expect(installWindows({ paths, env: ENV, source, run: runner.run })).rejects.toThrow(/^Install failed: /);
     expect(runner.calls.some((call) => call.file === REG)).toBe(false);
     expect(await readFile(paths.wrapperPath, 'utf8')).toBe('old wrapper');
+  });
+});
+
+describe('Windows install flow (single executable)', () => {
+  let paths: InstallPaths;
+  let source: HostSource;
+  let executable: string;
+
+  beforeEach(async () => {
+    const base = await tempBase();
+    paths = testPaths(join(base, 'LocalAppData', 'claude-firefox-extension'));
+    executable = join(base, 'Downloads', 'claude-firefox-host.exe');
+    await mkdir(join(base, 'Downloads'), { recursive: true });
+    await writeFile(executable, 'new binary');
+    source = { kind: 'binary', executable };
+  });
+
+  const asideCopies = async () =>
+    (await readdir(paths.dir)).filter((name) => name.startsWith('claude-firefox-host.exe.old-'));
+
+  it('copies itself into the restricted directory and registers a manifest that names the copy', async () => {
+    const seen: boolean[] = [];
+    const runner = fakeRunner((call) => {
+      seen.push(existsSync(paths.binaryPath));
+      return { stdout: '', stderr: '' };
+    });
+    await installWindows({ paths, env: ENV, source, run: runner.run });
+    expect(runner.calls.map((call) => call.file)).toEqual([WHOAMI, ICACLS, REG]);
+    expect(seen).toEqual([false, true]);
+    expect(await readFile(paths.binaryPath, 'utf8')).toBe('new binary');
+    expect(JSON.parse(await readFile(paths.manifestPath, 'utf8'))).toMatchObject({ path: paths.binaryPath });
+    expect(existsSync(paths.wrapperPath)).toBe(false);
+    expect(await readdir(paths.dir)).toEqual(['claude-firefox-host.exe', 'claude_firefox_extension.json'].sort());
+  });
+
+  it('replaces the binary of an earlier version on upgrade', async () => {
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.binaryPath, 'old binary');
+    await installWindows({ paths, env: ENV, source, run: fakeRunner().run });
+    expect(await readFile(paths.binaryPath, 'utf8')).toBe('new binary');
+    expect(await asideCopies()).toEqual([]);
+  });
+
+  it('upgrades a running binary by renaming it aside and keeps that copy until it can be removed', async () => {
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.binaryPath, 'old binary');
+    const running = paths.binaryPath;
+    // The running image keeps its handle when it is renamed, so it stays locked under its new name.
+    const locked = new Set([running]);
+    const ops: FileOps = {
+      copyFile: nodeFileOps.copyFile,
+      rename: async (from, to) => {
+        await nodeFileOps.rename(from, to);
+        if (locked.delete(from)) locked.add(to);
+      },
+      rm: async (target, options) => {
+        if (locked.has(target)) throw inUse(target);
+        await nodeFileOps.rm(target, options);
+      },
+    };
+    await installWindows({ paths, env: ENV, source, run: fakeRunner().run, ops });
+    expect(await readFile(paths.binaryPath, 'utf8')).toBe('new binary');
+    const [aside, ...rest] = await asideCopies();
+    expect(rest).toEqual([]);
+    expect(await readFile(join(paths.dir, aside ?? ''), 'utf8')).toBe('old binary');
+
+    // The next install, after the old host exited, removes the copy.
+    locked.clear();
+    await installWindows({ paths, env: ENV, source, run: fakeRunner().run, ops });
+    expect(await asideCopies()).toEqual([]);
+  });
+
+  it('fails with a clear message and changes nothing when the running binary cannot even be renamed', async () => {
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.binaryPath, 'old binary');
+    await writeFile(paths.manifestPath, '{"old":true}');
+    const runner = fakeRunner();
+    await expect(
+      installWindows({ paths, env: ENV, source, run: runner.run, ops: runningExecutableOps(paths.binaryPath, { renameLocked: true }) }),
+    ).rejects.toThrow(/^Install failed: .*claude-firefox-host\.exe is in use and cannot be replaced.*Close Firefox and Claude Code, then run install again\./s);
+    expect(runner.calls.some((call) => call.file === REG)).toBe(false);
+    expect(await readFile(paths.binaryPath, 'utf8')).toBe('old binary');
+    expect(await readFile(paths.manifestPath, 'utf8')).toBe('{"old":true}');
+    expect(await readdir(paths.dir)).toEqual(['claude-firefox-host.exe', 'claude_firefox_extension.json'].sort());
+  });
+
+  it('puts the previous binary and manifest back when reg add fails', async () => {
+    await mkdir(paths.dir, { recursive: true });
+    await writeFile(paths.binaryPath, 'old binary');
+    await writeFile(paths.manifestPath, '{"old":true}');
+    const runner = fakeRunner((call) => {
+      if (isTool(call, REG, 'add')) throw commandFailed('ERROR: Access is denied.');
+      return { stdout: '', stderr: '' };
+    });
+    await expect(installWindows({ paths, env: ENV, source, run: runner.run })).rejects.toThrow(/^Install failed: .*Access is denied/s);
+    expect(await readFile(paths.binaryPath, 'utf8')).toBe('old binary');
+    expect(await readFile(paths.manifestPath, 'utf8')).toBe('{"old":true}');
+    expect(await readdir(paths.dir)).toEqual(['claude-firefox-host.exe', 'claude_firefox_extension.json'].sort());
+  });
+
+  it('removes the new binary when reg add fails on a first install', async () => {
+    const runner = fakeRunner((call) => {
+      if (isTool(call, REG, 'add')) throw commandFailed('ERROR: Access is denied.');
+      return { stdout: '', stderr: '' };
+    });
+    await expect(installWindows({ paths, env: ENV, source, run: runner.run })).rejects.toThrow(/^Install failed: /);
+    expect(await readdir(paths.dir)).toEqual([]);
+  });
+
+  it('reinstalls when run from the installed copy without copying it onto itself', async () => {
+    await installWindows({ paths, env: ENV, source, run: fakeRunner().run });
+    const copies: string[] = [];
+    const ops: FileOps = { ...nodeFileOps, copyFile: async (from, to) => void copies.push(from, to) };
+    await installWindows({ paths, env: ENV, source: { kind: 'binary', executable: paths.binaryPath }, run: fakeRunner().run, ops });
+    expect(copies).toEqual([]);
+    expect(await readFile(paths.binaryPath, 'utf8')).toBe('new binary');
+  });
+
+  it('fails without registering when the running executable cannot be read', async () => {
+    const runner = fakeRunner();
+    await expect(
+      installWindows({ paths, env: ENV, source: { kind: 'binary', executable: join(paths.dir, 'missing.exe') }, run: runner.run }),
+    ).rejects.toThrow(/^Install failed: .*ENOENT/s);
+    expect(runner.calls.some((call) => call.file === REG)).toBe(false);
+    expect(await readdir(paths.dir)).toEqual([]);
   });
 });
 
@@ -507,23 +648,33 @@ describe('Windows uninstall flow', () => {
   let paths: InstallPaths;
 
   beforeEach(async () => {
-    const dir = join(await tempBase(), 'LocalAppData', 'claude-firefox-extension');
-    paths = { dir, wrapperPath: join(dir, 'native-host.bat'), manifestPath: join(dir, 'claude_firefox_extension.json') };
-    await mkdir(dir, { recursive: true });
+    paths = testPaths(join(await tempBase(), 'LocalAppData', 'claude-firefox-extension'));
+    await mkdir(paths.dir, { recursive: true });
     await writeFile(paths.wrapperPath, 'wrapper');
     await writeFile(paths.manifestPath, '{}');
   });
 
   it('deletes the registry key, then the files and the empty directory', async () => {
+    await writeFile(paths.binaryPath, 'binary');
+    await writeFile(`${paths.binaryPath}.old-0123456789ab`, 'older binary');
     const seen: boolean[] = [];
     const runner = fakeRunner(() => {
       seen.push(existsSync(paths.manifestPath));
       return { stdout: '', stderr: '' };
     });
-    await uninstallWindows({ paths, env: ENV, run: runner.run });
+    await expect(uninstallWindows({ paths, env: ENV, run: runner.run })).resolves.toEqual([]);
     expect(runner.calls).toEqual([{ file: REG, args: regDeleteArgs() }]);
     expect(seen).toEqual([true]);
     expect(existsSync(paths.dir)).toBe(false);
+  });
+
+  it('removes the registration but reports a running binary it cannot delete', async () => {
+    await writeFile(paths.binaryPath, 'binary');
+    const left = await uninstallWindows({ paths, env: ENV, run: fakeRunner().run, ops: runningExecutableOps(paths.binaryPath) });
+    expect(left).toEqual([paths.binaryPath]);
+    expect(existsSync(paths.manifestPath)).toBe(false);
+    expect(existsSync(paths.wrapperPath)).toBe(false);
+    expect(existsSync(paths.binaryPath)).toBe(true);
   });
 
   it('uses the given host name for the registry key', async () => {
@@ -592,7 +743,7 @@ describe('Windows uninstall flow', () => {
       removed.push(path);
       throw Object.assign(new Error(`EBUSY: resource busy or locked, rmdir '${path}'`), { code: 'EBUSY', syscall: 'rmdir', path });
     };
-    await expect(uninstallWindows({ paths, env: ENV, run: fakeRunner().run, removeDir })).resolves.toBeUndefined();
+    await expect(uninstallWindows({ paths, env: ENV, run: fakeRunner().run, removeDir })).resolves.toEqual([]);
     expect(removed).toEqual([paths.dir]);
     expect(existsSync(paths.wrapperPath)).toBe(false);
     expect(existsSync(paths.manifestPath)).toBe(false);
@@ -623,7 +774,7 @@ describe('Windows uninstall flow', () => {
     const runner = fakeRunner(() => {
       throw commandFailed('ERROR: not found');
     });
-    await expect(uninstallWindows({ paths, env: ENV, run: runner.run })).resolves.toBeUndefined();
+    await expect(uninstallWindows({ paths, env: ENV, run: runner.run })).resolves.toEqual([]);
   });
 });
 
@@ -723,9 +874,10 @@ describe.runIf(isWindowsCi)('Windows installer (real registry, CI only)', () => 
     const hostEntry = join(base, 'pkg', 'dist', 'host', 'index.js');
     await mkdir(join(base, 'pkg', 'dist', 'host'), { recursive: true });
     await writeFile(hostEntry, '');
-    const paths = windowsInstallPaths({ LOCALAPPDATA: join(base, 'LocalAppData') }, homedir());
+    const paths = installPaths('win32', { LOCALAPPDATA: join(base, 'LocalAppData') }, homedir());
+    const source: HostSource = { kind: 'node', nodePath: process.execPath, entry: hostEntry };
 
-    await installWindows({ paths, env: process.env, nodePath: process.execPath, hostEntry, run: execFileRunner, hostName });
+    await installWindows({ paths, env: process.env, source, run: execFileRunner, hostName });
     const { stdout } = await regQuery(key);
     expect(stdout).toMatch(/REG_SZ/);
     expect(stdout).toContain(paths.manifestPath);
@@ -735,54 +887,31 @@ describe.runIf(isWindowsCi)('Windows installer (real registry, CI only)', () => 
     await expect(regQuery(key)).rejects.toMatchObject({ code: 1 });
     expect(existsSync(paths.dir)).toBe(false);
 
-    await expect(uninstallWindows({ paths, env: process.env, run: execFileRunner, hostName })).resolves.toBeUndefined();
+    await expect(uninstallWindows({ paths, env: process.env, run: execFileRunner, hostName })).resolves.toEqual([]);
   });
 
+  // The bundled host run by Node is the development install (npm run install-host).
   describe('CLI', () => {
-    let packageDir: string;
     let localAppData: string;
 
     beforeEach(async () => {
-      const base = await tempBase();
-      packageDir = join(base, 'pkg');
-      localAppData = join(base, 'LocalAppData');
-      await mkdir(join(packageDir, 'scripts'), { recursive: true });
-      for (const name of await readdir(scriptsDir)) {
-        if (name.startsWith('install-host') && name.endsWith('.mjs')) {
-          await copyFile(join(scriptsDir, name), join(packageDir, 'scripts', name));
-        }
-      }
+      localAppData = join(await tempBase(), 'LocalAppData');
     });
 
-    function runCli(args: string[] = []) {
-      return run(process.execPath, [join(packageDir, 'scripts/install-host.mjs'), ...args], {
-        env: { ...process.env, LOCALAPPDATA: localAppData },
-      });
+    function runCli(args: string[]) {
+      return run(process.execPath, [bundledHost, ...args], { env: { ...process.env, LOCALAPPDATA: localAppData } });
     }
 
-    it('exits 1 with a clear error and registers nothing when the host is not built', async () => {
-      const hostEntry = join(packageDir, 'dist', 'host', 'index.js');
-      await expect(runCli()).rejects.toMatchObject({
-        code: 1,
-        stderr: expect.stringContaining(`Install failed: ${hostEntry} is missing. Run \`npm run build\` first.`),
-      });
-      expect(existsSync(join(localAppData, 'claude-firefox-extension'))).toBe(false);
-    });
-
-    it('rejects --print-paths without writing files or touching the registry', async () => {
+    it('prints the paths with install --print-paths without writing files or touching the registry', async () => {
       const keyExisted = await regQuery(KEY).then(
         () => true,
         () => false,
       );
       if (!keyExisted) deleteKeyAfterTest();
-      await mkdir(join(packageDir, 'dist', 'host'), { recursive: true });
-      await writeFile(join(packageDir, 'dist', 'host', 'index.js'), '');
+      const paths = installPaths('win32', { LOCALAPPDATA: localAppData }, homedir());
 
-      await expect(runCli(['--print-paths'])).rejects.toMatchObject({
-        code: 1,
-        stdout: '',
-        stderr: expect.stringContaining('--print-paths is not supported on win32'),
-      });
+      const { stdout } = await runCli(['install', '--print-paths']);
+      expect(JSON.parse(stdout)).toEqual({ manifest: paths.manifestPath, launcher: paths.wrapperPath });
       expect(existsSync(localAppData)).toBe(false);
       const keyExists = await regQuery(KEY).then(
         () => true,
@@ -798,16 +927,13 @@ describe.runIf(isWindowsCi)('Windows installer (real registry, CI only)', () => 
       );
       skip(realKeyExists, `${KEY} already exists; not touching a real installation`);
       deleteKeyAfterTest();
-      const hostEntry = join(packageDir, 'dist', 'host', 'index.js');
-      await mkdir(join(packageDir, 'dist', 'host'), { recursive: true });
-      await writeFile(hostEntry, '');
-      const paths = windowsInstallPaths({ LOCALAPPDATA: localAppData }, homedir());
+      const paths = installPaths('win32', { LOCALAPPDATA: localAppData }, homedir());
 
-      const { stdout } = await runCli();
-      expect(stdout).toContain(windowsMcpAddHint(process.execPath, hostEntry));
+      const { stdout } = await runCli(['install']);
+      expect(stdout).toContain(mcpAddCommand('win32', { kind: 'node', nodePath: process.execPath, entry: bundledHost }, paths));
       expect((await regQuery(KEY)).stdout).toContain(paths.manifestPath);
 
-      await runCli(['--uninstall']);
+      await runCli(['uninstall']);
       await expect(regQuery(KEY)).rejects.toMatchObject({ code: 1 });
       expect(existsSync(paths.dir)).toBe(false);
     });

@@ -59,20 +59,21 @@ The bridge connects the MCP server processes (started by Claude Code over stdio)
 
 ## Windows installer
 
-Windows support is required. `feature/windows-support` delivered the authenticated bridge above and the Windows installer (`scripts/install-host.mjs`, logic in `scripts/install-host-lib.mjs`).
+Windows support is required. `feature/windows-support` delivered the authenticated bridge above and the Windows installer; its logic now lives in `host/install/windows.ts` and runs as the host's `install`/`uninstall` subcommands (the single executable, or `npm run install-host` for a development build, see [Packaging](#packaging)).
 
 ### Install
 
 1. Create `%LOCALAPPDATA%\claude-firefox-extension\` and harden it with `icacls` while it is still empty: inheritance removed, full control for the current user's SID, SYSTEM and Administrators only.
-2. Write `native-host.bat` (CRLF; `@echo off`, `setlocal DisableDelayedExpansion`, `chcp 65001`, then the quoted Node binary and host entry with `--native-host %*`) and `claude_firefox_extension.json`, both UTF-8.
+2. Write the launcher and `claude_firefox_extension.json` (UTF-8). The single executable copies itself to `claude-firefox-host.exe` (see the upgrade in [Packaging](#packaging)); a development build gets `native-host.bat` (CRLF; `@echo off`, `setlocal DisableDelayedExpansion`, `chcp 65001`, then the quoted Node binary and host entry with `--native-host %*`, UTF-8).
 3. Register the manifest last as the default value of `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` with `reg.exe /reg:64`.
 
-If writing or registration fails, files that existed before the run get their previous content back (an older registry entry may still point at them) and new ones are removed.
+If writing or registration fails, files that existed before the run get their previous content back (an older registry entry may still point at them; a replaced binary is renamed back) and new ones are removed.
 
 ### Uninstall
 
 - Deletes the registry key first and keeps the files if `reg.exe` fails or cannot run.
 - Keeps the directory while it still holds `bridge.json` or a running host holds it open (`EBUSY`).
+- Removes `claude-firefox-host.exe` and copies left by earlier upgrades; a copy that is still running (a native host, an MCP server, or the installed binary running `uninstall` itself) cannot be deleted on Windows, so it is left in place with a message on stderr and the uninstall still succeeds (the registry key and the manifest are gone, so Firefox no longer starts it). Running `uninstall` from the downloaded binary after closing Firefox and Claude Code removes everything.
 
 ### System tools
 
@@ -81,7 +82,7 @@ If writing or registration fails, files that existed before the run get their pr
 ### Accepted edge cases (checked manually on Windows)
 
 - With delayed expansion enabled globally in the registry, cmd leaves a single `!` in the `.bat` path alone and only mangles it when two `!` enclose the name of a defined variable, which practically never happens in a profile path.
-- Firefox starts `cmd.exe /s/c "<bat> <manifest> <id>"` without quoting the `.bat` path when it has no spaces, so an install path with `&` or `^` and no space cannot be started (confirmed); the installer prints a warning for it.
+- Firefox starts `cmd.exe /s/c "<bat> <manifest> <id>"` without quoting the `.bat` path when it has no spaces, so an install path with `&` or `^` and no space cannot be started (confirmed); the installer prints a warning for it. This concerns only the development `.bat` wrapper: Firefox starts an `.exe` host directly, without cmd.exe.
 - Only `&` and `^` were verified for the unquoted `.bat` path; other cmd metacharacters (`,`, `;`, `=`, `%name%`) are untested.
 
 ## Threat model
@@ -225,25 +226,28 @@ If writing or registration fails, files that existed before the run get their pr
 
 End users install the native host without Node.js (`feature/packaging`).
 
-- Format: the host is shipped as a Node.js single executable application (SEA): one binary per OS and architecture, built from the host bundle without a new runtime or bundler. Later parts of the feature: the binary installs and uninstalls itself (`install`/`uninstall` subcommands), and releases are published on GitHub Releases. Binaries are not code-signed for now; the macOS Gatekeeper and Windows SmartScreen workaround is documented with the releases.
-- Bundle: a SEA runs only a CommonJS main script, so `npm run build` also writes `dist/host/sea.cjs`, the same host bundled as CommonJS; `host/index.ts` has no top-level await for that reason. In a SEA `process.argv` has the same layout as under `node index.js` (the executable twice, then the arguments), so the `--native-host`/`--mcp` dispatch is unchanged; `node:sea` `isSea()` only picks the program name in the usage text.
+- Format: the host is shipped as a Node.js single executable application (SEA): one binary per OS and architecture, built from the host bundle without a new runtime or bundler. The binary installs and uninstalls itself (`install`/`uninstall` subcommands, below); a later part of the feature publishes releases on GitHub Releases. Binaries are not code-signed for now; the macOS Gatekeeper and Windows SmartScreen workaround is documented with the releases.
+- Bundle: a SEA runs only a CommonJS main script, so `npm run build` also writes `dist/host/sea.cjs`, the same host bundled as CommonJS; `host/index.ts` has no top-level await for that reason. In a SEA `process.argv` has the same layout as under `node index.js` (the executable twice, then the arguments), so the dispatch (`host/command.ts`) is the same in both; `node:sea` `isSea()` picks the program name in the usage text and what `install` registers.
 - Build: `npm run build:binary` (`scripts/build-binary.mjs`, pure parts in `scripts/build-binary-lib.mjs`) turns `dist/host/sea.cjs` into `dist/bin/claude-firefox-host` (`.exe` on Windows) for the platform and Node binary it runs on, with the experimental SEA warning disabled and without a snapshot or code cache. When `node --help` lists `--build-sea` it runs `node --build-sea`; otherwise (Node 24, used in CI) it writes the preparation blob with `--experimental-sea-config` and injects it into a copy of node with `postject` (devDependency). On macOS the signature is removed before injection and the binary is signed ad hoc (`codesign --sign -`) afterwards; on Windows the binary stays unsigned. Intermediate files go to `dist/sea/`.
 - The binary embeds the Node binary it was built with: a Node built against shared system libraries (as some Linux distributions ship it) gives a binary that depends on those libraries, so release binaries are built with the official Node builds. postject was seen to produce a crashing binary from such a distribution Node; `--build-sea` worked there.
+- Self-install: `claude-firefox-host install` copies the running executable (`process.execPath`) into the per-user directory of [Native host installation paths](#native-host-installation-paths), writes the native messaging manifest naming that copy, registers it (HKCU on Windows with the hardened directory and rollback of [Windows installer](#windows-installer)) and prints `claude mcp add firefox -- '<installed binary>' --mcp` (double quotes on Windows) and the remote debugging note. `claude-firefox-host uninstall` removes the manifest, the registration, the binary and the development wrapper. `install --print-paths` prints the manifest and launcher paths as JSON without writing anything (used by the e2e). The installer is TypeScript in `host/install/`, bundled into the host; `npm run install-host` runs the same code through `node dist/host/index.js install`, where `isSea()` is false and a wrapper running Node with the build is written instead of a copy, as before (it now needs a build for `--uninstall` too).
+- Native host mode without a wrapper: the manifest names the binary itself, and Firefox starts a native host with two arguments, the manifest path and the extension id, on every OS. The host runs as the native host when the first argument is `--native-host` (the development wrapper) or, after the subcommands and flags are ruled out, when an argument after the first equals the extension id `claude-firefox-extension@localhost` (`EXTENSION_ID` in `host/protocol.ts`, checked against the extension manifest by a test); anything else prints the usage. A wrapper script would add a second file per OS and bring back the cmd.exe quoting problems of the `.bat` on Windows.
+- Upgrade: running `install` again (from a newer download, or from the installed copy, which is then not copied onto itself) copies the binary to a temporary file in the install directory, renames the existing binary aside (`claude-firefox-host[.exe].old-<random>`), renames the temporary file into place and removes the aside copy. Windows refuses to overwrite or delete a running executable but allows renaming it, so an upgrade works while Firefox or Claude Code still runs the old host; when the old one is still running, its aside copy stays and the next `install` or `uninstall` removes it. If even the rename fails, install stops with "... is in use and cannot be replaced ... Close Firefox and Claude Code, then run install again." without changing anything; if a later step fails, the previous binary and manifest are put back. Running hosts keep the old version until Firefox and Claude Code restart them.
 - CI: every OS runs `npm run build:binary` and `npm run smoke:binary` (`scripts/smoke-binary.mjs`): the binary without arguments prints the usage and exits with 1, and as `--mcp` answers an MCP `initialize` over stdio without a SEA warning on stderr and exits with 0 when stdin closes; every run is limited to 30 s.
 
 ## Native host installation paths
 
-`npm run install-host` writes a wrapper script that runs `dist/host/index.js --native-host` with the current Node binary, and the manifest `claude_firefox_extension.json`:
+`claude-firefox-host install` copies the binary into the install directory; `npm run install-host` writes a wrapper script there instead, which runs `dist/host/index.js --native-host` with the current Node binary. Both write the manifest `claude_firefox_extension.json` naming the binary or the wrapper:
 
-| OS | Wrapper | Manifest |
+| OS | Install directory (binary, wrapper) | Manifest |
 |---|---|---|
-| Linux | `~/.local/share/claude-firefox-extension/native-host` | `~/.mozilla/native-messaging-hosts/` |
-| macOS | `~/Library/Application Support/claude-firefox-extension/native-host` | `~/Library/Application Support/Mozilla/NativeMessagingHosts/` |
-| Windows | `%LOCALAPPDATA%\claude-firefox-extension\native-host.bat` | `%LOCALAPPDATA%\claude-firefox-extension\claude_firefox_extension.json`, registered under `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` |
+| Linux | `$XDG_DATA_HOME/claude-firefox-extension/` (default `~/.local/share/`): `claude-firefox-host`, `native-host` | `~/.mozilla/native-messaging-hosts/` |
+| macOS | `~/Library/Application Support/claude-firefox-extension/`: `claude-firefox-host`, `native-host` | `~/Library/Application Support/Mozilla/NativeMessagingHosts/` |
+| Windows | `%LOCALAPPDATA%\claude-firefox-extension\`: `claude-firefox-host.exe`, `native-host.bat` | `%LOCALAPPDATA%\claude-firefox-extension\claude_firefox_extension.json`, registered under `HKCU\Software\Mozilla\NativeMessagingHosts\claude_firefox_extension` |
 
 On Windows the directory is restricted with `icacls` (see Windows installer). The installer prints the `claude mcp add` command. Snap and Flatpak Firefox are not supported.
 
-`npm run uninstall-host` removes the manifest and the wrapper; on Windows also the registry key (the directory is kept while it still holds `bridge.json` or a running host holds it open).
+`claude-firefox-host uninstall` and `npm run uninstall-host` remove the manifest, the binary and the wrapper; on Windows also the registry key (the directory is kept while it still holds `bridge.json` or a running host holds it open, and a running binary is left in place with a message).
 
 ## Testing approach
 
@@ -254,13 +258,13 @@ TDD where it fits: logic with a spec known up front (protocols, framing, multipl
 - `npm test` needs no build, Firefox or network; it uses temp dirs under `/tmp`, never the real bridge socket directory or `~/.mozilla`.
 - Vitest projects: extension, host (bundles the host once in a global setup), shared, scripts.
 - `extension/test/`: unit tests with a mocked `browser` global (`browser-mock.ts`); not copied into `dist`. `manifest.test.ts` checks the permissions the tools need.
-- `host/test/`: unit tests, process tests against the bundled host, in-process timeout tests with fake timers. `helpers.ts` provides temp dirs under `/tmp`, endpoints as Unix sockets or Windows pipes from `bridge.json`, a fake extension and a bridge client; `global-setup.ts` bundles the host.
+- `host/test/`: unit tests, process tests against the bundled host, in-process timeout tests with fake timers; installer tests (`install-posix.test.ts`, `install-windows.test.ts`) against temp directories, with a fake runner for `reg.exe`, `icacls.exe` and `whoami.exe` and injected file operations for a running Windows executable; real registry and cmd.exe tests only on Windows CI. `helpers.ts` provides temp dirs under `/tmp`, endpoints as Unix sockets or Windows pipes from `bridge.json`, a fake extension and a bridge client; `global-setup.ts` bundles the host.
 - `shared/test/`: tests of the shared tool definitions.
-- `scripts/test/`: installer tests (run a copy of the installer against a temp `HOME`), e2e safety tests, build-time module tests and single executable build plan tests.
+- `scripts/test/`: `install-host.mjs` tests (a copy of the script runs a fake build), e2e safety tests, build-time module tests and single executable build plan tests.
 
 ## CI
 
-`.github/workflows/ci.yml` runs GitHub Actions on Linux, Windows and macOS (Node 24): `npm ci`, typecheck, build, lint, test, then the single executable build and its smoke check (see [Packaging](#packaging)). Then an e2e job per OS (needs test): installs the current Firefox release from Mozilla's official downloads into `RUNNER_TEMP`, prints its version, `npm ci`, build, `npm run e2e` with `E2E_FIREFOX`.
+`.github/workflows/ci.yml` runs GitHub Actions on Linux, Windows and macOS (Node 24): `npm ci`, typecheck, build, lint, test, then the single executable build and its smoke check (see [Packaging](#packaging)). Then an e2e job per OS (needs test): installs the current Firefox release from Mozilla's official downloads into `RUNNER_TEMP`, prints its version, `npm ci`, build, `npm run build:binary`, then `npm run e2e -- --binary` with `E2E_FIREFOX`, so the single executable installs itself and runs as the MCP server and the native host on every OS.
 
 ## E2E
 
@@ -268,7 +272,7 @@ TDD where it fits: logic with a spec known up front (protocols, framing, multipl
 
 `npm run e2e` (build first) runs against a real headless Firefox:
 
-1. Installs the native host.
+1. Asks the installer for its paths (`install --print-paths`), then installs the native host: with `--binary` the single executable `dist/bin/claude-firefox-host` runs `install` and must print the `claude mcp add` command for the installed copy, which then serves as the MCP server and, started by Firefox with the manifest path and the extension id, as the native host; without it `scripts/install-host.mjs` installs the development build.
 2. Loads a temporary copy of the built extension with the `web-ext` Node API in a temporary profile and waits for `bridge.json`. Nobody can answer a permission prompt in headless CI, so the copy gets an extra first background script that stores an always-allow record for `127.0.0.1` and an always-deny record for `localhost`; the built extension itself has no other way to grant a permission than the user's answer.
 3. Calls `tabs_context` through the MCP server (SDK default environment).
 4. Opens a tab with `tabs_create` on a page served by the script on `127.0.0.1` and a blank one, checks each appears in `tabs_context`, closes it with `tabs_close` and checks it is gone; then checks that `tabs_create` on the denied `localhost` is refused without opening a tab.
@@ -276,9 +280,9 @@ TDD where it fits: logic with a spec known up front (protocols, framing, multipl
 6. Reads a background tab on that page with `read_page`, checks the heading, button and viewport lines, then reads the button again by its `ref_id`.
 7. Reads the same page with `get_page_text`, checks the title, URL and source lines and the button text.
 8. Checks that a tool request without the handshake is closed unanswered.
-9. Runs a second Firefox for 40 s and requires 2 to 10 native host starts from it (counted by a `NODE_OPTIONS` preload) with `bridge.json` unchanged.
+9. Runs a second Firefox for 40 s and requires 2 to 10 native host starts from it (counted by a `NODE_OPTIONS` preload, which a single executable honours too, matching `--native-host` or the extension id in the arguments) with `bridge.json` unchanged.
 10. Stops the first Firefox and expects `bridge.json` removed and the not-connected error.
-11. Uninstalls.
+11. Closes the MCP server and uninstalls; with `--binary` the installed binary must be gone.
 
 It prints a PASS/FAIL summary and exits non-zero on failure. `E2E_FIREFOX` overrides the Firefox binary.
 
@@ -288,10 +292,12 @@ It prints a PASS/FAIL summary and exits non-zero on failure. `E2E_FIREFOX` overr
 - A local `--force` run (no `CI`) is Linux only: refused on Windows and macOS, where the installer or the bridge uses locations outside `HOME`.
 - It exits 2 unless `HOME` and `XDG_RUNTIME_DIR` are existing temporary directories strictly under `/tmp` (after resolving symlinks; `HOME` must not be, contain or lie inside the real home). These checks live in `scripts/e2e-safety.mjs` (pure, tested).
 - It then sets `TMPDIR=/tmp` and `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME` and `XDG_STATE_HOME` inside the temporary `HOME` for itself, the installer, Firefox and the MCP server (whatever the shell sets is ignored), and passes them and `XDG_RUNTIME_DIR` to the MCP server explicitly.
-- It asks the installer for its paths (`install-host.mjs --print-paths`, Linux and macOS only; it exits 1 on Windows), prints them and aborts before installing if any is outside the temporary `HOME` or reached through a symlink.
+- It asks the installer for its paths (`install --print-paths`), prints them and aborts before installing if any is outside the temporary `HOME` or reached through a symlink.
 
 Example:
 
 ```sh
 RT=$(mktemp -d /tmp/cfe-rt-XXXX); H=$(mktemp -d /tmp/cfe-home-XXXX); HOME=$H XDG_RUNTIME_DIR=$RT npm run e2e -- --force
 ```
+
+Add `--binary` after `--force` to run it through the single executable (`npm run build:binary` first).

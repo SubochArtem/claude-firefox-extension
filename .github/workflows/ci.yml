@@ -139,4 +139,6 @@ jobs:
 
       - run: npm ci
       - run: npm run build
-      - run: npm run e2e
+      - run: npm run build:binary
+      # The single executable installs itself and runs as the MCP server and the native host.
+      - run: npm run e2e -- --binary
