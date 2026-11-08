@@ -8,6 +8,8 @@
   },
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:binary": "node scripts/build-binary.mjs",
+    "smoke:binary": "node scripts/smoke-binary.mjs",
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p extension && tsc --noEmit -p host && tsc --noEmit -p shared",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -22,6 +24,7 @@
     "@types/node": "^26.6.5",
     "esbuild": "^0.28.2",
     "happy-dom": "^21.0.4",
+    "postject": "1.0.0-alpha.6",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5",
     "web-ext": "^10.8.0"

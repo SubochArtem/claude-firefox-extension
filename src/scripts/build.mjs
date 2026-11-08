@@ -62,15 +62,17 @@ try {
     for (const input of zodInputs.slice(0, 5)) console.error(`  ${input}`);
     process.exit(1);
   }
-  await build({
+  /** @type {import('esbuild').BuildOptions} */
+  const hostOptions = {
     entryPoints: [hostEntryPoint],
-    outfile: join(hostOutDir, 'index.js'),
     bundle: true,
-    format: 'esm',
     platform: 'node',
     target: `node${nodeMajor}`,
     logLevel: 'warning',
-  });
+  };
+  await build({ ...hostOptions, outfile: join(hostOutDir, 'index.js'), format: 'esm' });
+  // A Node single executable runs only a CommonJS main script (npm run build:binary).
+  await build({ ...hostOptions, outfile: join(hostOutDir, 'sea.cjs'), format: 'cjs' });
 } catch {
   process.exit(1);
 }
