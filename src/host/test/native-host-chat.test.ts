@@ -1,7 +1,7 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CLAUDE_PATH_ENV } from '../claude-cli';
+import { CLAUDE_PATH_ENV, chatWorkDir } from '../claude-cli';
 import { childEnv, hostEnv, startHost, tempDir, waitFor, type FakeExtension } from './helpers';
 
 const FAKE_CLAUDE = join(import.meta.dirname, 'fake-claude.mjs');
@@ -21,24 +21,23 @@ function isRunning(pid: number): boolean {
 
 // Firefox starts the host with a minimal environment, so the fake claude is found through the
 // explicit path variable; a shell wrapper stands in for the claude executable.
-async function hostWithFakeClaude(): Promise<{ host: FakeExtension; dir: string; record: string }> {
+async function hostWithFakeClaude(): Promise<{ host: FakeExtension; workDir: string; record: string }> {
   const dir = await tempDir();
   const runtimeDir = join(dir, 'run');
   const wrapper = join(dir, 'claude');
   const record = join(dir, 'runs.jsonl');
   writeFileSync(wrapper, `#!/bin/sh\nexec '${process.execPath}' '${FAKE_CLAUDE}' "$@"\n`);
   chmodSync(wrapper, 0o755);
-  const env = childEnv(
-    { [CLAUDE_PATH_ENV]: wrapper, FAKE_CLAUDE_RECORD: record, HOME: dir, XDG_DATA_HOME: join(dir, 'data') },
-    hostEnv(runtimeDir),
-  );
+  const overrides = { [CLAUDE_PATH_ENV]: wrapper, FAKE_CLAUDE_RECORD: record, HOME: dir, XDG_DATA_HOME: join(dir, 'data') };
+  const env = childEnv(overrides, hostEnv(runtimeDir));
   mkdirSync(runtimeDir, { mode: 0o700 });
-  return { host: await startHost(runtimeDir, { env }), dir, record };
+  const workDir = chatWorkDir(process.platform, overrides, dir);
+  return { host: await startHost(runtimeDir, { env }), workDir, record };
 }
 
 describe.skipIf(process.platform === 'win32')('native host chat sessions', () => {
   it('runs a session through native messaging in the private working directory', async () => {
-    const { host, dir, record } = await hostWithFakeClaude();
+    const { host, workDir, record } = await hostWithFakeClaude();
     host.send({ type: 'chat_start', sessionId: 's1' });
     host.send({ type: 'chat_send', sessionId: 's1', content: 'hello' });
     await waitFor(() =>
@@ -46,14 +45,13 @@ describe.skipIf(process.platform === 'win32')('native host chat sessions', () =>
     );
     const runs = readFileSync(record, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { argv: string[]; cwd: string });
     const chat = runs.find((run) => run.argv[0] === '-p');
-    const workDir = join(dir, 'data', 'claude-firefox-extension', 'chat');
-    expect(chat?.cwd).toBe(workDir);
+    expect(existsSync(workDir)).toBe(true);
+    expect(realpathSync(chat?.cwd ?? '')).toBe(realpathSync(workDir));
     const config = JSON.parse(chat?.argv[chat.argv.indexOf('--mcp-config') + 1] ?? '{}') as {
       mcpServers: { firefox: { command: string; args: string[] } };
     };
     expect(config.mcpServers.firefox.command).toBe(process.execPath);
     expect(config.mcpServers.firefox.args.at(-1)).toBe('--mcp');
-    expect(existsSync(workDir)).toBe(true);
   });
 
   it('answers a malformed chat request that names a valid session id', async () => {

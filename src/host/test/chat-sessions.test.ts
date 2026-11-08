@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, onTestFinished } from 'vitest';
 import { ChatStartError, prepareChatWorkDir, type ClaudeCommand } from '../claude-cli';
@@ -111,7 +111,7 @@ describe('chat sessions', () => {
       '--model=claude-haiku-5-5',
       '--append-system-prompt=Be brief.',
     ]);
-    expect(runs[2]?.cwd).toBe(h.workDir);
+    expect(realpathSync(runs[2]?.cwd ?? '')).toBe(realpathSync(h.workDir));
   });
 
   it('strips API credentials and provider switches from every claude run', async () => {
