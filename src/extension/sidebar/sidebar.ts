@@ -7,7 +7,7 @@ import { isRecord } from '../tools/navigation-input';
 import { type ChatChange, type ChatItem, ChatSession } from './chat-session';
 import { renderMarkdown } from './markdown';
 import { affectsSetup, type SetupState, setupState } from './setup-state';
-import { CHAT_TOOL_CALL_MESSAGE } from './sidebar-messages';
+import { CHAT_TOOL_CALL_MESSAGE } from './sidebar-constants';
 
 const apiAccess = { origins: [ANTHROPIC_API_ORIGIN] };
 const SCROLL_SLACK_PX = 40;
@@ -24,6 +24,7 @@ const stopButton = element<HTMLButtonElement>('stop');
 const newChatButton = element<HTMLButtonElement>('new-chat');
 const views = new Map<number, HTMLElement>();
 let setup: SetupState = { kind: 'needs_key', text: '' };
+let setupGeneration = 0;
 
 // The sidebar's own window: each window has its own sidebar document.
 const currentWindow = browser.windows.getCurrent();
@@ -110,8 +111,9 @@ function renderControls(): void {
   prompt.disabled = setup.kind !== 'ready';
 }
 
-async function renderSetup(): Promise<void> {
+async function renderSetup(generation: number): Promise<void> {
   const [{ apiKey }, granted] = await Promise.all([loadChatSettings(), browser.permissions.contains(apiAccess)]);
+  if (generation !== setupGeneration) return;
   setup = setupState(apiKey, granted);
   element('setup').hidden = setup.kind === 'ready';
   element('setup-text').textContent = setup.kind === 'ready' ? '' : setup.text;
@@ -121,7 +123,9 @@ async function renderSetup(): Promise<void> {
 }
 
 function refreshSetup(): void {
-  renderSetup().catch((error: unknown) => {
+  const generation = ++setupGeneration;
+  renderSetup(generation).catch((error: unknown) => {
+    if (generation !== setupGeneration) return;
     element('setup').hidden = false;
     element('setup-text').textContent = `Could not load the chat settings: ${error instanceof Error ? error.message : String(error)}`;
   });

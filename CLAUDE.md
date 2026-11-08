@@ -127,6 +127,7 @@ src/                   npm package root; every command is run from here
       chat-session.ts  conversation state without browser.* calls: history (a prompt after a trailing user message joins it), running state, agent loop events to view items (streamed text, tool lines with clipped input and results, retry and error notes)
       setup-state.ts   setup state from the saved key and the api.anthropic.com grant: needs key, needs access, ready
       sidebar-messages.ts  background handler for the sidebar's tool calls: sender check (sidebar page only), tool registry with the popup prompt and the native port's BiDi channels, results as text and image blocks
+      sidebar-constants.ts  sidebar page path and the tool call message type, shared by the sidebar page and the background handler without pulling in the tools
     page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
       element-role.ts  role from the role attribute or the tag, interactive check, heading level

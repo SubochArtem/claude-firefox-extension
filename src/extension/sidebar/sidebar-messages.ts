@@ -5,9 +5,9 @@ import { executeTool } from '../tools';
 import type { BidiEvaluateChannel } from '../tools/bidi-evaluate';
 import type { BidiInputChannel } from '../tools/bidi-input';
 import { isRecord } from '../tools/navigation-input';
+import { CHAT_TOOL_CALL_MESSAGE, SIDEBAR_PAGE } from './sidebar-constants';
 
-export const SIDEBAR_PAGE = 'sidebar/sidebar.html';
-export const CHAT_TOOL_CALL_MESSAGE = 'chat_tool_call';
+export { CHAT_TOOL_CALL_MESSAGE, SIDEBAR_PAGE };
 
 export interface BidiChannels {
   input?: BidiInputChannel | undefined;
