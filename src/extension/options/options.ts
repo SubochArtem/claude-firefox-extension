@@ -1,8 +1,9 @@
 import { ANTHROPIC_API_ORIGIN, CHAT_MODELS, CHAT_SETTINGS_STORAGE_KEY, type ChatModel, loadChatSettings, saveChatSettings, validApiKey } from '../chat-settings';
 import { loadPermissions, PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 import { type AgentTabs, loadSettings, saveSettings, SETTINGS_STORAGE_KEY } from '../settings';
-import { REVOKE_PERMISSION_MESSAGE } from './options-messages';
-import { apiKeyStatus, permissionRows } from './options-view';
+import type { ClaudeCodeStatusReply } from '../chat/claude-code-relay';
+import { CLAUDE_CODE_STATUS_MESSAGE, REVOKE_PERMISSION_MESSAGE } from './options-messages';
+import { apiKeyStatus, claudeCodeStatusText, permissionRows } from './options-view';
 
 function element<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -113,6 +114,11 @@ async function renderApiAccess(): Promise<void> {
   grantButton.hidden = granted;
 }
 
+async function renderClaudeCodeStatus(): Promise<void> {
+  const reply = (await browser.runtime.sendMessage({ type: CLAUDE_CODE_STATUS_MESSAGE })) as ClaudeCodeStatusReply;
+  element('claude-code-status').textContent = claudeCodeStatusText(reply);
+}
+
 let chatSettingsUpdate: Promise<void> = Promise.resolve();
 
 // Each update reads and writes the whole record, so updates run one at a time to keep each other's changes.
@@ -176,6 +182,7 @@ browser.storage.local.onChanged.addListener((changes) => {
   if (SETTINGS_STORAGE_KEY in changes) reportFailure(renderSettings(), 'load the setting');
   if (CHAT_SETTINGS_STORAGE_KEY in changes) reportFailure(renderChatSettings(), 'load the chat settings');
   if (PERMISSION_STORAGE_KEY in changes) reportFailure(renderPermissions(), 'load the site permissions');
+reportFailure(renderClaudeCodeStatus(), 'check Claude Code');
 });
 
 reportFailure(renderSettings(), 'load the setting');

@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, posix, win32 } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
@@ -8,6 +8,7 @@ import {
   checkClaude,
   claudeChatArgs,
   claudeEnv,
+  claudeStatus,
   isSupportedClaudeVersion,
   locateClaude,
   mcpServerConfig,
@@ -240,6 +241,88 @@ describe('checkClaude', () => {
   it('reports a command that cannot be started', async () => {
     const error = await startErrorOf(checkClaude({ command: join(await tempDir(), 'missing'), args: [] }, { ...process.env }));
     expect(error.code).toBe('spawn_failed');
+  });
+});
+
+describe('claudeStatus', () => {
+  const locateFake = () => fakeCommand;
+
+  it('reports a supported claude logged in with a subscription as ready', async () => {
+    expect(await claudeStatus(locateFake, { ...process.env })).toEqual({
+      found: true,
+      path: process.execPath,
+      version: '2.1.316',
+      versionOk: true,
+      loggedIn: true,
+      authMethod: 'claude.ai',
+      ready: true,
+    });
+  });
+
+  it('reports a claude that is too old without checking the login', async () => {
+    expect(await claudeStatus(locateFake, { ...process.env, FAKE_CLAUDE_VERSION: '2.1.301 (Claude Code)' })).toEqual({
+      found: true,
+      path: process.execPath,
+      version: '2.1.301',
+      versionOk: false,
+      ready: false,
+    });
+  });
+
+  it('reports an unreadable version as not supported', async () => {
+    expect(await claudeStatus(locateFake, { ...process.env, FAKE_CLAUDE_VERSION: 'nonsense' })).toEqual({
+      found: true,
+      path: process.execPath,
+      versionOk: false,
+      ready: false,
+    });
+  });
+
+  it('reports a claude that is not logged in', async () => {
+    const status = await claudeStatus(locateFake, { ...process.env, FAKE_CLAUDE_LOGGED_IN: 'false' });
+    expect(status).toMatchObject({ found: true, versionOk: true, loggedIn: false, ready: false });
+  });
+
+  it.each(['apiKey', 'oauth_token'])('reports a login with the auth method %s as not ready', async (authMethod) => {
+    const status = await claudeStatus(locateFake, { ...process.env, FAKE_CLAUDE_AUTH_METHOD: authMethod });
+    expect(status).toMatchObject({ loggedIn: true, authMethod, ready: false });
+  });
+
+  it('accepts a login without an auth method from an older claude', async () => {
+    const status = await claudeStatus(locateFake, { ...process.env, FAKE_CLAUDE_AUTH_METHOD: 'absent' });
+    expect(status).toMatchObject({ loggedIn: true, ready: true });
+    expect(status).not.toHaveProperty('authMethod');
+  });
+
+  it.each(['x'.repeat(65), 'two words', 'line\nbreak'])('drops a malformed auth method %j and is not ready', async (authMethod) => {
+    const status = await claudeStatus(locateFake, { ...process.env, FAKE_CLAUDE_AUTH_METHOD: authMethod });
+    expect(status).toMatchObject({ loggedIn: true, ready: false });
+    expect(status).not.toHaveProperty('authMethod');
+  });
+
+  it('reports a claude that was not found with the locate message', async () => {
+    const status = await claudeStatus(() => {
+      throw new ChatStartError('claude_not_found', 'Claude Code was not found.');
+    }, { ...process.env });
+    expect(status).toEqual({ found: false, ready: false, error: 'Claude Code was not found.' });
+  });
+
+  it('reports a command that cannot be run', async () => {
+    const missing = join(await tempDir(), 'missing');
+    const status = await claudeStatus(() => ({ command: missing, args: [] }), { ...process.env });
+    expect(status).toMatchObject({ found: true, path: missing, ready: false });
+    expect(status.error).toContain(missing);
+  });
+
+  it('runs the checks with the session environment, without API credentials', async () => {
+    const record = join(await tempDir(), 'runs.jsonl');
+    await claudeStatus(locateFake, { ...process.env, ANTHROPIC_API_KEY: 'sk-secret', FAKE_CLAUDE_RECORD: record });
+    const runs = readFileSync(record, 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { argv: string[]; env: Record<string, string> });
+    expect(runs.map((run) => run.argv)).toEqual([['--version'], ['auth', 'status', '--json']]);
+    for (const run of runs) expect(run.env).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 });
 

@@ -16,7 +16,7 @@ import { runBidiEvaluate } from './bidi-evaluate';
 import { runBidiInput } from './bidi-input';
 import { createSerialQueue } from './bidi-session';
 import { createChatSessions, type ChatSessions } from './chat-sessions';
-import { chatWorkDir, locateClaude, mcpServerConfig, prepareChatWorkDir } from './claude-cli';
+import { chatWorkDir, claudeStatus, type ClaudeCommand, locateClaude, mcpServerConfig, prepareChatWorkDir } from './claude-cli';
 import {
   clientProof,
   createNonce,
@@ -392,6 +392,13 @@ function handleExtensionMessage(message: unknown): void {
     void performBidiEvaluate(parsed).then(sendToExtension);
     return;
   }
+  if (parsed.type === 'chat_status_request') {
+    const { requestId } = parsed;
+    void claudeStatus(locateHostClaude, process.env).then((status) => {
+      sendToExtension({ type: 'chat_status_response', requestId, ...status });
+    });
+    return;
+  }
   if (parsed.type !== 'tool_response') {
     chatSessions?.handle(parsed);
     return;
@@ -457,13 +464,17 @@ function shutdown(server: Server, socketPath: string | undefined, reason: string
   else if (!server.listening) exitAfterBidiRequest(0);
 }
 
+function locateHostClaude(): ClaudeCommand {
+  return locateClaude({ platform: process.platform, env: process.env, home: homedir() });
+}
+
 function createHostChatSessions(source: HostSource): ChatSessions {
   const home = homedir();
   return createChatSessions({
     send: (message) => {
       sendToExtension(message);
     },
-    locate: () => locateClaude({ platform: process.platform, env: process.env, home }),
+    locate: locateHostClaude,
     env: process.env,
     workDir: () => prepareChatWorkDir(chatWorkDir(process.platform, process.env, home)),
     mcpConfig: mcpServerConfig(source),

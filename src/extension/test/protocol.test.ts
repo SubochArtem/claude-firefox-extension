@@ -119,3 +119,71 @@ describe('parseHostMessage', () => {
     expect(parseHostMessage(value)).toBeUndefined();
   });
 });
+
+describe('parseHostMessage chat messages', () => {
+  it('accepts chat events, errors and closes and drops unknown fields', () => {
+    expect(parseHostMessage({ type: 'chat_event', sessionId: 's-1', event: { type: 'assistant' }, x: 1 })).toEqual({
+      type: 'chat_event',
+      sessionId: 's-1',
+      event: { type: 'assistant' },
+    });
+    expect(parseHostMessage({ type: 'chat_event', sessionId: 's', event: { type: 'user' }, reduced: true })).toEqual({
+      type: 'chat_event',
+      sessionId: 's',
+      event: { type: 'user' },
+      reduced: true,
+    });
+    expect(parseHostMessage({ type: 'chat_error', sessionId: 's', code: 'exited', message: 'gone', x: 1 })).toEqual({
+      type: 'chat_error',
+      sessionId: 's',
+      code: 'exited',
+      message: 'gone',
+    });
+    expect(parseHostMessage({ type: 'chat_closed', sessionId: 's', x: 1 })).toEqual({ type: 'chat_closed', sessionId: 's' });
+  });
+
+  it.each([
+    ['an event without a valid session id', { type: 'chat_event', sessionId: 'a b', event: {} }],
+    ['an event that is not an object', { type: 'chat_event', sessionId: 's', event: [] }],
+    ['an error without a message', { type: 'chat_error', sessionId: 's', code: 'exited' }],
+    ['an error without a code', { type: 'chat_error', sessionId: 's', message: 'x' }],
+    ['a close without a session id', { type: 'chat_closed' }],
+    ['a status response without a request id', { type: 'chat_status_response', found: true, ready: true }],
+  ])('rejects %s', (_label, value) => {
+    expect(parseHostMessage(value)).toBeUndefined();
+  });
+
+  it('accepts a status response with only the well-formed fields', () => {
+    expect(
+      parseHostMessage({
+        type: 'chat_status_response',
+        requestId: 'chat-status-1',
+        found: true,
+        path: '/usr/bin/claude',
+        version: '2.1.316',
+        versionOk: true,
+        loggedIn: true,
+        authMethod: 'claude.ai',
+        ready: true,
+        email: 'someone@example.com',
+      }),
+    ).toEqual({
+      type: 'chat_status_response',
+      requestId: 'chat-status-1',
+      found: true,
+      path: '/usr/bin/claude',
+      version: '2.1.316',
+      versionOk: true,
+      loggedIn: true,
+      authMethod: 'claude.ai',
+      ready: true,
+    });
+    expect(parseHostMessage({ type: 'chat_status_response', requestId: 'r', found: 'yes', ready: 1, version: 2, error: 'e' })).toEqual({
+      type: 'chat_status_response',
+      requestId: 'r',
+      found: false,
+      ready: false,
+      error: 'e',
+    });
+  });
+});

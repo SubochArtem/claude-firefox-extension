@@ -202,13 +202,38 @@ export interface ChatClosed {
   sessionId: string;
 }
 
+// Asks whether Claude Code can run sidebar chat sessions; answered with chat_status_response.
+export interface ChatStatusRequest {
+  type: 'chat_status_request';
+  requestId: string;
+}
+
+// Never carries anything from claude's auth output beyond loggedIn and a well-formed authMethod.
+export interface ChatStatus {
+  found: boolean;
+  path?: string;
+  version?: string;
+  versionOk?: boolean;
+  loggedIn?: boolean;
+  authMethod?: string;
+  // Sessions can start: supported version, logged in with a Claude subscription.
+  ready: boolean;
+  error?: string;
+}
+
+export interface ChatStatusResponse extends ChatStatus {
+  type: 'chat_status_response';
+  requestId: string;
+}
+
 export type ExtensionToHostMessage =
   | { type: 'ping' }
   | ToolResponse
   | PermissionRequest
   | BidiInputRequest
   | BidiEvaluateRequest
-  | ChatRequest;
+  | ChatRequest
+  | ChatStatusRequest;
 export type HostToExtensionMessage =
   | { type: 'pong' }
   | ToolRequest
@@ -217,7 +242,8 @@ export type HostToExtensionMessage =
   | BidiEvaluateResponse
   | ChatEvent
   | ChatError
-  | ChatClosed;
+  | ChatClosed
+  | ChatStatusResponse;
 
 export function textOutput(text: string): ToolOutput {
   return { content: [{ type: 'text', text }] };
@@ -380,12 +406,19 @@ export function parseChatRequest(value: unknown): ChatRequest | undefined {
   };
 }
 
+export function parseChatStatusRequest(value: unknown): ChatStatusRequest | undefined {
+  if (!isRecord(value) || value['type'] !== 'chat_status_request') return undefined;
+  const { requestId } = value;
+  return isField(requestId) ? { type: 'chat_status_request', requestId } : undefined;
+}
+
 export function isChatRequestType(value: unknown): boolean {
   return isRecord(value) && typeof value['type'] === 'string' && value['type'].startsWith('chat_');
 }
 
 export function parseExtensionMessage(value: unknown): ExtensionToHostMessage | undefined {
   if (isRecord(value) && value['type'] === 'ping') return { type: 'ping' };
+  if (isRecord(value) && value['type'] === 'chat_status_request') return parseChatStatusRequest(value);
   if (isChatRequestType(value)) return parseChatRequest(value);
   if (isRecord(value) && value['type'] === 'permission_request') return parsePermissionRequest(value);
   if (isRecord(value) && value['type'] === 'bidi_input_request') return parseBidiInputRequest(value);

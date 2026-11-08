@@ -13,6 +13,7 @@ import {
   MAX_CHAT_SYSTEM_PROMPT_LENGTH,
   MAX_PERMISSION_FIELD_LENGTH,
   parseChatRequest,
+  parseChatStatusRequest,
   parseExtensionMessage,
   parsePermissionRequest,
   parsePermissionResponse,
@@ -333,6 +334,24 @@ describe('parseChatRequest', () => {
     ['an image by URL', { type: 'chat_send', sessionId: 's', content: [{ type: 'image', source: { type: 'url', url: 'https://x' } }] }],
   ])('rejects %s', (_label, value) => {
     expect(parseChatRequest(value)).toBeUndefined();
+    expect(parseExtensionMessage(value)).toBeUndefined();
+  });
+});
+
+describe('parseChatStatusRequest', () => {
+  it('accepts a status request with a request id and drops unknown fields', () => {
+    const request = { type: 'chat_status_request', requestId: 'status-1' };
+    expect(parseChatStatusRequest({ ...request, extra: 1 })).toEqual(request);
+    expect(parseExtensionMessage(request)).toEqual(request);
+  });
+
+  it.each([
+    ['a missing request id', { type: 'chat_status_request' }],
+    ['an empty request id', { type: 'chat_status_request', requestId: '' }],
+    ['a too long request id', { type: 'chat_status_request', requestId: 'r'.repeat(MAX_PERMISSION_FIELD_LENGTH + 1) }],
+    ['a numeric request id', { type: 'chat_status_request', requestId: 1 }],
+  ])('rejects %s', (_label, value) => {
+    expect(parseChatStatusRequest(value)).toBeUndefined();
     expect(parseExtensionMessage(value)).toBeUndefined();
   });
 });

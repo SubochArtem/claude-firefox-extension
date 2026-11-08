@@ -522,3 +522,50 @@ describe('stale ports', () => {
     expect(browserMock.connectNative).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('chat relay', () => {
+  function listener() {
+    return { handleHostMessage: vi.fn(), hostDisconnected: vi.fn() };
+  }
+
+  it('sends chat requests over the current port and reports when there is none', () => {
+    expect(bridge.sendToNativeHost({ type: 'chat_close', sessionId: 's' })).toBe(false);
+    const port = connectAndPong();
+    expect(bridge.sendToNativeHost({ type: 'chat_close', sessionId: 's' })).toBe(true);
+    expect(port.postMessage).toHaveBeenLastCalledWith({ type: 'chat_close', sessionId: 's' });
+    port.emitDisconnect();
+    expect(bridge.sendToNativeHost({ type: 'chat_close', sessionId: 's' })).toBe(false);
+  });
+
+  it('reports a port that throws on postMessage as not connected', () => {
+    const port = connectAndPong();
+    port.postMessage.mockImplementation(() => {
+      throw new Error('Attempt to postMessage on disconnected port');
+    });
+    expect(bridge.sendToNativeHost({ type: 'chat_status_request', requestId: 'r' })).toBe(false);
+  });
+
+  it('passes chat messages from the host to the listener, not to the tools', async () => {
+    const chat = listener();
+    bridge.setChatHostListener(chat);
+    const port = connectAndPong();
+    const messages = [
+      { type: 'chat_event', sessionId: 's', event: { type: 'assistant' } },
+      { type: 'chat_error', sessionId: 's', code: 'exited', message: 'gone' },
+      { type: 'chat_closed', sessionId: 's' },
+      { type: 'chat_status_response', requestId: 'r', found: false, ready: false },
+    ];
+    for (const message of messages) port.emitMessage(message);
+    await flushPromises();
+    expect(chat.handleHostMessage.mock.calls.map((call) => call[0])).toEqual(messages);
+    expect(port.postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the listener when the port is lost', () => {
+    const chat = listener();
+    bridge.setChatHostListener(chat);
+    const port = connectAndPong();
+    port.emitDisconnect();
+    expect(chat.hostDisconnected).toHaveBeenCalledOnce();
+  });
+});

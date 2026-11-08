@@ -12,13 +12,14 @@ export interface FakePort {
   emitDisconnect: (errorMessage?: string) => void;
 }
 
-function createPort(name: string): FakePort {
+export function createPort(name: string, sender?: browser.runtime.MessageSender): FakePort {
   const messageListeners: ((message: unknown) => void)[] = [];
   const disconnectListeners: (() => void)[] = [];
   const postMessage = vi.fn();
   const disconnect = vi.fn();
   const port = {
     name,
+    sender,
     error: undefined as { message: string } | undefined,
     postMessage,
     disconnect,

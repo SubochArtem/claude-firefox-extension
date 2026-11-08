@@ -12,18 +12,28 @@ export const CHAT_MODELS = [
 
 export type ChatModel = (typeof CHAT_MODELS)[number]['id'];
 
+// api: the sidebar calls the Anthropic API with the saved key; claude-code: it runs the user's local
+// Claude Code through the native host.
+export const CHAT_BACKENDS = ['api', 'claude-code'] as const;
+export type ChatBackend = (typeof CHAT_BACKENDS)[number];
+
 export interface ChatSettings {
   apiKey: string;
   model: ChatModel;
+  backend: ChatBackend;
 }
 
-export const DEFAULT_CHAT_SETTINGS: ChatSettings = { apiKey: '', model: 'claude-sonnet-5-5' };
+export const DEFAULT_CHAT_SETTINGS: ChatSettings = { apiKey: '', model: 'claude-sonnet-5-5', backend: 'api' };
 
 // The key goes into a request header, so only printable ASCII without spaces can be sent.
 const API_KEY_PATTERN = /^[\x21-\x7e]*$/;
 
 function isChatModel(value: unknown): value is ChatModel {
   return CHAT_MODELS.some((model) => model.id === value);
+}
+
+function isChatBackend(value: unknown): value is ChatBackend {
+  return CHAT_BACKENDS.some((backend) => backend === value);
 }
 
 export function validApiKey(value: unknown): string | undefined {
@@ -37,6 +47,7 @@ export function parseChatSettings(value: unknown): ChatSettings {
   return {
     apiKey: validApiKey(value.apiKey) ?? DEFAULT_CHAT_SETTINGS.apiKey,
     model: isChatModel(value.model) ? value.model : DEFAULT_CHAT_SETTINGS.model,
+    backend: isChatBackend(value.backend) ? value.backend : DEFAULT_CHAT_SETTINGS.backend,
   };
 }
 
@@ -47,6 +58,6 @@ export async function loadChatSettings(): Promise<ChatSettings> {
 
 export async function saveChatSettings(settings: ChatSettings): Promise<void> {
   const apiKey = isRecord(settings) ? validApiKey(settings.apiKey) : undefined;
-  if (apiKey === undefined || !isChatModel(settings.model)) throw new Error('Invalid chat settings');
-  await browser.storage.local.set({ [CHAT_SETTINGS_STORAGE_KEY]: { apiKey, model: settings.model } });
+  if (apiKey === undefined || !isChatModel(settings.model) || !isChatBackend(settings.backend)) throw new Error('Invalid chat settings');
+  await browser.storage.local.set({ [CHAT_SETTINGS_STORAGE_KEY]: { apiKey, model: settings.model, backend: settings.backend } });
 }
