@@ -12,6 +12,7 @@ import {
   extensionAssetName,
   releaseNotes,
   releaseVersion,
+  TARGETS,
   targetFor,
 } from './release-lib.mjs';
 
@@ -50,6 +51,12 @@ async function main(args) {
     console.log(releaseVersion(/** @type {string} */ (rest[0]), versions));
   } else if (command === 'stage-binary' && rest.length === 2) {
     const [target, dir] = /** @type {[string, string]} */ (rest);
+    const expected = TARGETS.map(({ id }) => id).join(', ');
+    if (target === '') throw new Error(`stage-binary: the target argument is empty; expected one of ${expected}`);
+    if (!TARGETS.some(({ id }) => id === target)) {
+      throw new Error(`stage-binary: unknown target "${target}"; expected one of ${expected}`);
+    }
+    if (dir === '') throw new Error('stage-binary: the directory argument is empty');
     const here = targetFor(process.platform, process.arch);
     if (here !== target) {
       throw new Error(`This machine builds ${here ?? `${process.platform}-${process.arch}`}, not ${target}`);

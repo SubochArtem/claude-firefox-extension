@@ -60,6 +60,24 @@ describe('release.mjs stage-binary', () => {
     expect(code).toBe(1);
     expect(stderr).toMatch(new RegExp(`This machine builds \\S+, not ${other}`));
   });
+
+  it('names the missing target when the target argument is empty', async () => {
+    const { code, stderr } = await failure(['stage-binary', '', dir]);
+    expect(code).toBe(1);
+    expect(stderr).toContain('stage-binary: the target argument is empty; expected one of linux-x64,');
+  });
+
+  it('names the missing directory when the directory argument is empty', async () => {
+    const { code, stderr } = await failure(['stage-binary', 'linux-x64', '']);
+    expect(code).toBe(1);
+    expect(stderr).toContain('stage-binary: the directory argument is empty');
+  });
+
+  it('rejects an unknown target before comparing it with this machine', async () => {
+    const { code, stderr } = await failure(['stage-binary', 'plan9-mips', dir]);
+    expect(code).toBe(1);
+    expect(stderr).toContain('stage-binary: unknown target "plan9-mips"; expected one of linux-x64,');
+  });
 });
 
 describe('release.mjs checksums', () => {
