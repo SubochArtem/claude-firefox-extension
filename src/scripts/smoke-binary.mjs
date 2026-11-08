@@ -32,8 +32,15 @@ function run(args, driver) {
     }, TIMEOUT_MS);
     child.stdout.setEncoding('utf8').on('data', (chunk) => {
       stdout += chunk;
-      driver?.onStdout(child, stdout);
+      try {
+        driver?.onStdout(child, stdout);
+      } catch (error) {
+        clearTimeout(timer);
+        child.kill();
+        reject(error);
+      }
     });
+    child.stdin.on('error', () => {});
     child.stderr.setEncoding('utf8').on('data', (chunk) => {
       stderr += chunk;
     });
@@ -70,9 +77,21 @@ try {
       child.stdin.write(`${JSON.stringify(initialize)}\n`);
     },
     onStdout: (child, stdout) => {
-      const line = stdout.split('\n').slice(0, -1).find((text) => text.includes('"id":1'));
-      if (line === undefined || response !== undefined) return;
-      response = JSON.parse(line);
+      if (response !== undefined) return;
+      for (const line of stdout.split('\n').slice(0, -1)) {
+        /** @type {unknown} */
+        let message;
+        try {
+          message = JSON.parse(line);
+        } catch {
+          throw new Error(`--mcp wrote a line that is not JSON: ${line}`);
+        }
+        if (/** @type {{ id?: unknown } | null} */ (message)?.id === 1) {
+          response = message;
+          break;
+        }
+      }
+      if (response === undefined) return;
       // The server exits when stdin closes.
       child.stdin.end();
     },
