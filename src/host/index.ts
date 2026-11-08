@@ -30,7 +30,7 @@ async function main(args: string[]): Promise<void> {
   const command = parseCommand(args);
   switch (command.kind) {
     case 'native-host':
-      return runNativeHost();
+      return runNativeHost(hostSource());
     case 'mcp':
       return runMcpServer();
     case 'install':

@@ -53,7 +53,7 @@ async function startInProcessHost(runtimeDir: string) {
   try {
     vi.resetModules();
     const { runNativeHost } = await import('../native-host');
-    await runNativeHost();
+    await runNativeHost({ kind: 'node', nodePath: process.execPath, entry: 'index.js' });
   } catch (error) {
     removeHostListeners();
     throw error;
