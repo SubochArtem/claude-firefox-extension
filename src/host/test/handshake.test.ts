@@ -169,6 +169,20 @@ describe('parseAuth', () => {
     expect(parseAuth({ type: 'auth', proof: CLIENT_PROOF, extra: 1 })).toEqual({ type: 'auth', proof: CLIENT_PROOF });
   });
 
+  it('keeps a chat session token', () => {
+    const chatToken = '33'.repeat(32);
+    expect(parseAuth({ type: 'auth', proof: CLIENT_PROOF, chatToken })).toEqual({ type: 'auth', proof: CLIENT_PROOF, chatToken });
+  });
+
+  it.each([
+    ['a short token', 'ab'.repeat(31)],
+    ['an uppercase hex token', 'AB'.repeat(32)],
+    ['a numeric token', 7],
+    ['an empty token', ''],
+  ])('drops %s and keeps the auth', (_label, chatToken) => {
+    expect(parseAuth({ type: 'auth', proof: CLIENT_PROOF, chatToken })).toEqual({ type: 'auth', proof: CLIENT_PROOF });
+  });
+
   it.each([
     ['null', null],
     ['an array', [{ type: 'auth', proof: CLIENT_PROOF }]],

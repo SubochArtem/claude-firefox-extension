@@ -5,9 +5,10 @@ import type { CallToolResult, ClientCapabilities, ElicitRequestFormParams, Elici
 import packageJson from '../package.json' with { type: 'json' };
 import { TOOL_DEFINITIONS } from '../shared/tool-definitions';
 import { readBridgeInfo } from './bridge-info';
-import { authenticateToHost, HandshakeError } from './handshake';
+import { authenticateToHost, HandshakeError, isHex64 } from './handshake';
 import { writeJsonLine } from './json-lines';
 import {
+  CHAT_TOKEN_ENV,
   isRecord,
   parsePermissionRequest,
   parseToolResponse,
@@ -54,7 +55,10 @@ export class BridgeConnection {
   private nextRequestId = 1;
   private closed = false;
 
-  constructor(private readonly askUser?: PermissionAsker) {}
+  constructor(
+    private readonly askUser?: PermissionAsker,
+    private readonly chatToken?: string,
+  ) {}
 
   async call(tool: string, args: Record<string, unknown>, { approvalViaClient = false } = {}): Promise<CallToolResult> {
     if (this.closed) return errorResult('The MCP server is shutting down');
@@ -122,7 +126,11 @@ export class BridgeConnection {
       });
     });
     try {
-      await authenticateToHost(socket, secret, { logPrefix: LOG, onMessage: (message) => this.handleMessage(socket, message) });
+      await authenticateToHost(socket, secret, {
+        logPrefix: LOG,
+        onMessage: (message) => this.handleMessage(socket, message),
+        ...(this.chatToken === undefined ? {} : { chatToken: this.chatToken }),
+      });
     } catch (error) {
       if (error instanceof HandshakeError) throw new AuthenticationError(error.message);
       throw error;
@@ -253,14 +261,23 @@ function errorResult(text: string): CallToolResult {
 
 export async function runMcpServer(): Promise<void> {
   const server = new McpServer({ name: packageJson.name, version: packageJson.version });
-  const bridge = new BridgeConnection(async (request, signal) =>
-    permissionAnswer(
-      request,
-      await server.server.elicitInput(permissionElicitation(request), { timeout: PERMISSION_PROMPT_TIMEOUT_MS, signal }),
-    ),
+  // Set only when the native host started this server's claude for a sidebar chat session.
+  const envToken = process.env[CHAT_TOKEN_ENV];
+  const chatToken = isHex64(envToken) ? envToken : undefined;
+  const bridge = new BridgeConnection(
+    async (request, signal) =>
+      permissionAnswer(
+        request,
+        await server.server.elicitInput(permissionElicitation(request), { timeout: PERMISSION_PROMPT_TIMEOUT_MS, signal }),
+      ),
+    chatToken,
   );
+  // A sidebar chat session's claude -p advertises form elicitation but runs without a user to answer
+  // it, so its calls are never flagged; the extension asks in its popup instead.
   const forward = (tool: string) => (args: Record<string, unknown>) =>
-    bridge.call(tool, args, { approvalViaClient: supportsFormElicitation(server.server.getClientCapabilities()) });
+    bridge.call(tool, args, {
+      approvalViaClient: chatToken === undefined && supportsFormElicitation(server.server.getClientCapabilities()),
+    });
 
   for (const tool of TOOL_DEFINITIONS) {
     server.registerTool(tool.name, { description: tool.description, inputSchema: tool.inputSchema }, forward(tool.name));

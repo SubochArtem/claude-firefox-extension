@@ -17,6 +17,9 @@ export interface ToolRequest {
   // Set when the MCP client can ask the user: site permissions are then asked through
   // permission_request instead of the popup.
   approvalViaClient?: true;
+  // Set by the native host on calls from a sidebar Claude Code session: site permissions are then
+  // asked in the popup, whatever approvalViaClient says.
+  chatSessionId?: string;
 }
 
 export type ToolResponse =
@@ -93,6 +96,11 @@ export type HostToExtensionMessage =
   | BidiInputResponse
   | BidiEvaluateResponse;
 
+// Must match isChatSessionId in host/protocol.ts.
+function isChatSessionId(value: unknown): value is string {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -133,5 +141,13 @@ export function parseHostMessage(value: unknown): HostToExtensionMessage | undef
   if (value['type'] !== 'tool_request') return undefined;
   const { id, tool, args } = value;
   if (typeof id !== 'string' || typeof tool !== 'string' || !isRecord(args)) return undefined;
-  return { type: 'tool_request', id, tool, args, ...(value['approvalViaClient'] === true ? { approvalViaClient: true } : {}) };
+  const chatSessionId = value['chatSessionId'];
+  return {
+    type: 'tool_request',
+    id,
+    tool,
+    args,
+    ...(value['approvalViaClient'] === true ? { approvalViaClient: true } : {}),
+    ...(isChatSessionId(chatSessionId) ? { chatSessionId } : {}),
+  };
 }

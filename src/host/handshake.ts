@@ -11,7 +11,7 @@ import { isRecord, type Auth, type ClientHello, type HostHello, type Ready } fro
 //
 //   client -> host  {"type":"hello","nonce":clientNonce}
 //   host -> client  {"type":"hello","nonce":serverNonce,"proof":hostProof}
-//   client -> host  {"type":"auth","proof":clientProof}
+//   client -> host  {"type":"auth","proof":clientProof[,"chatToken":token]}
 //   host -> client  {"type":"ready"}
 
 export const HANDSHAKE_TIMEOUT_MS = 2_000;
@@ -56,9 +56,11 @@ export function parseHostHello(value: unknown): HostHello | undefined {
   return { type: 'hello', nonce, proof: claimed };
 }
 
+// A malformed chat token is dropped: the client is then served as a normal one.
 export function parseAuth(value: unknown): Auth | undefined {
   if (!isRecord(value) || value['type'] !== 'auth' || !isHex64(value['proof'])) return undefined;
-  return { type: 'auth', proof: value['proof'] };
+  const { chatToken } = value;
+  return { type: 'auth', proof: value['proof'], ...(isHex64(chatToken) ? { chatToken } : {}) };
 }
 
 export function parseReady(value: unknown): Ready | undefined {
@@ -75,6 +77,8 @@ export interface ClientHandshakeOptions {
   maxLineBytes?: () => number;
   // Receives every line that arrives after ready.
   onMessage?: (message: unknown) => void;
+  // Sent with the auth, so only a host that has proved the secret learns it.
+  chatToken?: string;
 }
 
 // The client side of the handshake on a connected socket. The host proves it knows the secret before
@@ -85,7 +89,7 @@ export interface ClientHandshakeOptions {
 export function authenticateToHost(
   socket: Socket,
   secret: string,
-  { logPrefix, timeoutMs = HANDSHAKE_TIMEOUT_MS, maxLineBytes, onMessage }: ClientHandshakeOptions,
+  { logPrefix, timeoutMs = HANDSHAKE_TIMEOUT_MS, maxLineBytes, onMessage, chatToken }: ClientHandshakeOptions,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const clientNonce = createNonce();
@@ -118,7 +122,8 @@ export function authenticateToHost(
             return fail('the native host could not prove it knows the secret from bridge.json');
           }
           serverNonce = hello.nonce;
-          writeJsonLine(socket, { type: 'auth', proof: clientProof(secret, clientNonce, serverNonce) });
+          const auth: Auth = { type: 'auth', proof: clientProof(secret, clientNonce, serverNonce) };
+          writeJsonLine(socket, chatToken === undefined ? auth : { ...auth, chatToken });
           return;
         }
         if (!parseReady(message)) return fail('expected ready from the native host');

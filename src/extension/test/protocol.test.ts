@@ -28,6 +28,19 @@ describe('parseHostMessage', () => {
     );
   });
 
+  it('keeps a well-formed chat session id and drops a malformed one', () => {
+    expect(parseHostMessage({ type: 'tool_request', id: '1:2', tool: 't', args: {}, chatSessionId: 'chat_1-a' })).toEqual({
+      type: 'tool_request',
+      id: '1:2',
+      tool: 't',
+      args: {},
+      chatSessionId: 'chat_1-a',
+    });
+    for (const chatSessionId of ['', 'bad id', 'x'.repeat(129), 7]) {
+      expect(parseHostMessage({ type: 'tool_request', id: '1:2', tool: 't', args: {}, chatSessionId })).not.toHaveProperty('chatSessionId');
+    }
+  });
+
   it('accepts a permission response and leaves the answer to the approval parser', () => {
     expect(parseHostMessage({ type: 'permission_response', requestId: 'r', answer: 'maybe', includeSubdomains: 1, x: 1 })).toEqual({
       type: 'permission_response',

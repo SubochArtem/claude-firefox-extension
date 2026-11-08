@@ -78,12 +78,15 @@ interface Client {
   socket: Socket;
   pendingIds: Set<string>;
   permissionIds: Set<string>;
+  // The token the client presented in its auth; it names a chat session only while that session lives.
+  chatToken?: string;
 }
 
 interface PendingRequest {
   client: Client;
   originalId: string;
   timer: NodeJS.Timeout;
+  chatSessionId?: string;
 }
 
 interface SocketIdentity {
@@ -155,14 +158,15 @@ function respond(client: Client, response: ToolResponse): void {
   if (!client.socket.destroyed) writeJsonLine(client.socket, response);
 }
 
-// Only the client that owns the call is asked; without one the extension gets a deny at once.
+// Only the client that owns the call is asked; without one, or when the call comes from a sidebar
+// chat session whose headless Claude Code has nobody to ask, the extension gets a deny at once.
 function handlePermissionRequest(request: PermissionRequest): void {
   if (permissionRequests.has(request.requestId)) {
     console.error(`${LOG} duplicate permission request ${request.requestId}`);
     return;
   }
   const call = pending.get(request.callId);
-  if (!call || call.client.socket.destroyed) {
+  if (!call || call.client.socket.destroyed || call.chatSessionId !== undefined) {
     sendToExtension(denyPermission(request.requestId));
     return;
   }
@@ -202,7 +206,11 @@ function handleClientRequest(client: Client, message: unknown): void {
     respond(client, errorResponse(request.id, `Duplicate request id ${request.id}`));
     return;
   }
-  const forwarded: ToolRequest = { ...request, id: globalId };
+  const chatSessionId = client.chatToken === undefined ? undefined : chatSessions?.sessionForToken(client.chatToken);
+  const forwarded: ToolRequest =
+    chatSessionId === undefined
+      ? { ...request, id: globalId }
+      : { type: 'tool_request', id: globalId, tool: request.tool, args: request.args, chatSessionId };
   if (!sendToExtension(forwarded)) {
     respond(client, errorResponse(request.id, `Could not forward ${request.tool} to the Firefox extension`));
     return;
@@ -212,7 +220,7 @@ function handleClientRequest(client: Client, message: unknown): void {
     client.pendingIds.delete(globalId);
     respond(client, errorResponse(request.id, `The Firefox extension did not answer ${request.tool} in time`));
   }, HOST_REQUEST_TIMEOUT_MS);
-  pending.set(globalId, { client, originalId: request.id, timer });
+  pending.set(globalId, { client, originalId: request.id, timer, ...(chatSessionId === undefined ? {} : { chatSessionId }) });
   client.pendingIds.add(globalId);
 }
 
@@ -257,6 +265,7 @@ function handleConnection(socket: Socket): void {
     if (!verifyProof(clientProof(info.secret, nonces.client, nonces.server), auth.proof)) return reject('wrong proof');
     releaseSlot();
     client = { id, socket, pendingIds: new Set(), permissionIds: new Set() };
+    if (auth.chatToken !== undefined) client.chatToken = auth.chatToken;
     clients.set(id, client);
     writeJsonLine(socket, { type: 'ready' });
   };

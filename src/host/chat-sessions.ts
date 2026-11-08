@@ -1,8 +1,16 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { chatEventMessage, createLineReader, parseClaudeLine } from './chat-events';
 import { ChatStartError, checkClaude, claudeChatArgs, claudeEnv, type ClaudeCommand } from './claude-cli';
 import type { Env } from './install/paths';
-import type { ChatContentBlock, ChatErrorCode, ChatRequest, ChatStart, HostToExtensionMessage } from './protocol';
+import {
+  CHAT_TOKEN_ENV,
+  type ChatContentBlock,
+  type ChatErrorCode,
+  type ChatRequest,
+  type ChatStart,
+  type HostToExtensionMessage,
+} from './protocol';
 
 const LOG = '[chat]';
 export const MAX_CHAT_SESSIONS = 4;
@@ -27,10 +35,15 @@ export interface ChatSessions {
   /** Kills every session process at once; safe in a process 'exit' handler. */
   killAll: () => void;
   size: () => number;
+  /** The id of the live session whose MCP server presents `token`, if any. */
+  sessionForToken: (token: string) => string | undefined;
 }
 
 interface Session {
   id: string;
+  // Given to the session's claude in CHAT_TOKEN_ENV and passed on to its MCP server, which presents it
+  // to the bridge so the host can tell the session's tool calls apart.
+  token: string;
   child?: ChildProcessWithoutNullStreams;
   queued: string[];
   closing: boolean;
@@ -48,6 +61,7 @@ function userLine(content: string | ChatContentBlock[]): string {
 export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
   const { send, locate, env, workDir, mcpConfig, closeGraceMs = CLOSE_GRACE_MS } = options;
   const sessions = new Map<string, Session>();
+  const byToken = new Map<string, Session>();
   let silent = false;
 
   const emit = (message: HostToExtensionMessage): void => {
@@ -62,6 +76,7 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
     session.finished = true;
     clearTimeout(session.killTimer);
     if (sessions.get(session.id) === session) sessions.delete(session.id);
+    byToken.delete(session.token);
     emit({ type: 'chat_closed', sessionId: session.id });
   };
 
@@ -91,7 +106,11 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
       ...(request.model === undefined ? {} : { model: request.model }),
       ...(request.appendSystemPrompt === undefined ? {} : { appendSystemPrompt: request.appendSystemPrompt }),
     });
-    const child = spawn(claude.command, [...claude.args, ...args], { cwd, env: claudeEnv(env), windowsHide: true });
+    const child = spawn(claude.command, [...claude.args, ...args], {
+      cwd,
+      env: { ...claudeEnv(env), [CHAT_TOKEN_ENV]: session.token },
+      windowsHide: true,
+    });
     session.child = child;
     child.stdin.on('error', (cause) => console.error(`${LOG} session ${session.id} stdin error: ${cause.message}`));
     const read = createLineReader((line) => {
@@ -173,8 +192,18 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
         emit({ type: 'chat_closed', sessionId });
         return;
       }
-      const created: Session = { id: sessionId, queued: [], closing: false, finished: false, stderrTail: '', nextControlId: 1, killed: false };
+      const created: Session = {
+        id: sessionId,
+        token: randomBytes(32).toString('hex'),
+        queued: [],
+        closing: false,
+        finished: false,
+        stderrTail: '',
+        nextControlId: 1,
+        killed: false,
+      };
       sessions.set(sessionId, created);
+      byToken.set(created.token, created);
       void start(created, request);
       return;
     }
@@ -232,5 +261,6 @@ export function createChatSessions(options: ChatSessionsOptions): ChatSessions {
       }
     },
     size: () => sessions.size,
+    sessionForToken: (token) => byToken.get(token)?.id,
   };
 }

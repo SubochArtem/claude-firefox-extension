@@ -2,7 +2,17 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFile
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { CLAUDE_PATH_ENV, chatWorkDir } from '../claude-cli';
-import { childEnv, hostEnv, startHost, tempDir, waitFor, type FakeExtension } from './helpers';
+import {
+  childEnv,
+  connectChatClient,
+  connectClient,
+  hostEnv,
+  startHost,
+  tempDir,
+  textResult,
+  waitFor,
+  type FakeExtension,
+} from './helpers';
 
 const FAKE_CLAUDE = join(import.meta.dirname, 'fake-claude.mjs');
 
@@ -33,6 +43,26 @@ async function hostWithFakeClaude(): Promise<{ host: FakeExtension; workDir: str
   mkdirSync(runtimeDir, { mode: 0o700 });
   const workDir = chatWorkDir(process.platform, overrides, dir);
   return { host: await startHost(runtimeDir, { env }), workDir, record };
+}
+
+interface ChatRun {
+  argv: string[];
+  pid: number;
+  env: Record<string, string>;
+}
+
+function chatRuns(record: string): ChatRun[] {
+  return readFileSync(record, 'utf8')
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as ChatRun)
+    .filter((run) => run.argv[0] === '-p');
+}
+
+async function startedSession(host: FakeExtension, record: string, sessionId: string): Promise<string> {
+  host.send({ type: 'chat_start', sessionId });
+  await waitFor(() => expect(chatRuns(record)).toHaveLength(Number(sessionId.slice(1))));
+  return chatRuns(record).at(-1)?.env['CLAUDE_FIREFOX_CHAT_TOKEN'] ?? '';
 }
 
 describe.skipIf(process.platform === 'win32')('native host chat sessions', () => {
@@ -78,5 +108,75 @@ describe.skipIf(process.platform === 'win32')('native host chat sessions', () =>
     host.child.stdin.end();
     expect(await host.exited).toBe(0);
     await waitFor(() => expect(isRunning(pid ?? 0)).toBe(false));
+  });
+  it('tags the tool requests of a chat session client with its session id and leaves other clients untagged', async () => {
+    const { host, record } = await hostWithFakeClaude();
+    const first = await startedSession(host, record, 's1');
+    const second = await startedSession(host, record, 's2');
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(second).not.toBe(first);
+
+    const chat = await connectChatClient(host, second);
+    chat.send({ type: 'tool_request', id: '1', tool: 'navigate', args: {}, approvalViaClient: true, chatSessionId: 's1' });
+    expect(await host.nextRequest()).toEqual({
+      type: 'tool_request',
+      id: expect.stringMatching(/^\d+:1$/),
+      tool: 'navigate',
+      args: {},
+      chatSessionId: 's2',
+    });
+
+    const normal = await connectClient(host);
+    normal.send({ type: 'tool_request', id: '2', tool: 'navigate', args: {}, approvalViaClient: true, chatSessionId: 's1' });
+    expect(await host.nextRequest()).toEqual({
+      type: 'tool_request',
+      id: expect.stringMatching(/^\d+:2$/),
+      tool: 'navigate',
+      args: {},
+      approvalViaClient: true,
+    });
+
+    const unknown = await connectChatClient(host, '55'.repeat(32));
+    unknown.send({ type: 'tool_request', id: '3', tool: 'navigate', args: {} });
+    expect(await host.nextRequest()).toEqual({ type: 'tool_request', id: expect.stringMatching(/^\d+:3$/), tool: 'navigate', args: {} });
+  });
+
+  it('denies a permission request for a chat session call without asking its client', async () => {
+    const { host, record } = await hostWithFakeClaude();
+    const token = await startedSession(host, record, 's1');
+    const chat = await connectChatClient(host, token);
+    chat.send({ type: 'tool_request', id: '1', tool: 'navigate', args: {} });
+    const request = await host.nextRequest();
+    host.send({
+      type: 'permission_request',
+      requestId: 'req-1',
+      callId: request['id'],
+      host: 'example.com',
+      tool: 'navigate',
+      action: 'navigate',
+      canIncludeSubdomains: true,
+    });
+    await waitFor(() =>
+      expect(chatMessages(host, 'permission_response')).toEqual([
+        { type: 'permission_response', requestId: 'req-1', answer: 'deny', includeSubdomains: false },
+      ]),
+    );
+    host.send(textResult(request['id'], 'done'));
+    expect(await chat.nextLine()).toEqual(textResult('1', 'done'));
+    expect(chat.lines).toEqual([textResult('1', 'done')]);
+  });
+
+  it('treats the token of a closed session as unknown', async () => {
+    const { host, record } = await hostWithFakeClaude();
+    const token = await startedSession(host, record, 's1');
+    const early = await connectChatClient(host, token);
+    host.send({ type: 'chat_close', sessionId: 's1' });
+    await waitFor(() => expect(chatMessages(host, 'chat_closed')).toHaveLength(1));
+
+    const late = await connectChatClient(host, token);
+    late.send({ type: 'tool_request', id: '1', tool: 'navigate', args: {} });
+    expect(await host.nextRequest()).toEqual({ type: 'tool_request', id: expect.stringMatching(/^\d+:1$/), tool: 'navigate', args: {} });
+    early.send({ type: 'tool_request', id: '2', tool: 'navigate', args: {} });
+    expect(await host.nextRequest()).toEqual({ type: 'tool_request', id: expect.stringMatching(/^\d+:2$/), tool: 'navigate', args: {} });
   });
 });

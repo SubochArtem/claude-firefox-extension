@@ -746,6 +746,40 @@ describe('MCP server permission elicitation', () => {
     await waitFor(() => expect(permissionResponses(host)).toEqual([DENY]));
   });
 
+  it('presents the chat session token after the host proof and never asks the client of a chat session', async () => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    const chatToken = randomHex();
+    let asked = 0;
+    const { client } = await startMcp(runtimeDir, { ...serverEnv(runtimeDir), CLAUDE_FIREFOX_CHAT_TOKEN: chatToken }, async () => {
+      asked++;
+      return { action: 'accept', content: { decision: 'allow_always' } };
+    });
+    const { call, request } = await startNavigate(host, client);
+    expect(host.received.map((message) => message['type'])).toEqual(['hello', 'auth', 'tool_request']);
+    expect(host.received[0]).not.toHaveProperty('chatToken');
+    expect(host.received[1]).toEqual({ type: 'auth', proof: expect.stringMatching(/^[0-9a-f]{64}$/), chatToken });
+    expect(request).toEqual({ type: 'tool_request', id: '1', tool: 'navigate', args: { tabId: 1, url: 'example.com' } });
+    host.answer(permissionRequest('1'));
+    await waitFor(() => expect(permissionResponses(host)).toEqual([DENY]));
+    expect(asked).toBe(0);
+    host.answer(textResult('1', 'done'));
+    expect(await call).toEqual({ content: [{ type: 'text', text: 'done' }] });
+  });
+
+  it.each([
+    ['no token', undefined],
+    ['a malformed token', 'not-a-token'],
+  ])('sends no chat token with %s in the environment', async (_label, token) => {
+    const runtimeDir = await tempDir();
+    const host = await startFakeHost(runtimeDir);
+    const env = token === undefined ? serverEnv(runtimeDir) : { ...serverEnv(runtimeDir), CLAUDE_FIREFOX_CHAT_TOKEN: token };
+    const { client } = await startMcp(runtimeDir, env, async () => ({ action: 'accept', content: { decision: 'allow_once' } }));
+    const { request } = await startNavigate(host, client);
+    expect(host.received[1]).toEqual({ type: 'auth', proof: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(request).toMatchObject({ approvalViaClient: true });
+  });
+
   it('denies a permission request for a call that is not pending without asking', async () => {
     const runtimeDir = await tempDir();
     const host = await startFakeHost(runtimeDir);

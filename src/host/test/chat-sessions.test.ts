@@ -127,6 +127,31 @@ describe('chat sessions', () => {
     }
   });
 
+  it('gives every session its own token in the environment of claude only, and maps it back while the session lives', async () => {
+    const h = await harness({ env: { CLAUDE_FIREFOX_CHAT_TOKEN: 'inherited' } });
+    await started(h, 's1');
+    await started(h, 's2');
+    const chatRuns = h.runs().filter((run) => run.argv[0] === '-p');
+    const tokens = chatRuns.map((run) => run.env['CLAUDE_FIREFOX_CHAT_TOKEN'] ?? '');
+    expect(tokens).toHaveLength(2);
+    for (const token of tokens) expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(new Set(tokens).size).toBe(2);
+    for (const run of chatRuns) expect(run.argv.join(' ')).not.toContain(run.env['CLAUDE_FIREFOX_CHAT_TOKEN']);
+    for (const run of h.runs().filter((run) => run.argv[0] !== '-p')) {
+      expect(Object.keys(run.env)).not.toContain('CLAUDE_FIREFOX_CHAT_TOKEN');
+    }
+    const sessionOf = (token: string) => h.sessions.sessionForToken(token);
+    const [first, second] = tokens as [string, string];
+    expect([sessionOf(first), sessionOf(second)]).toEqual(['s1', 's2']);
+    expect(sessionOf('inherited')).toBeUndefined();
+    expect(sessionOf('44'.repeat(32))).toBeUndefined();
+
+    h.handle({ type: 'chat_close', sessionId: 's1' });
+    await waitFor(() => expect(h.of('s1', 'chat_closed')).toHaveLength(1));
+    expect(sessionOf(first)).toBeUndefined();
+    expect(sessionOf(second)).toBe('s2');
+  });
+
   it('sends content blocks as the user message', async () => {
     const h = await harness();
     await started(h);
