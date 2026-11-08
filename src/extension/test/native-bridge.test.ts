@@ -347,6 +347,16 @@ describe('permission prompts through the MCP client', () => {
     expect(permissionRequests(port)).toEqual([]);
     expect(browserMock.windows.create).toHaveBeenCalledOnce();
   });
+
+  it('opens the popup for a sidebar chat session call even when it is flagged', async () => {
+    closableTab();
+    const port = connectAndPong();
+    const args = { tabId: 5 };
+    port.emitMessage({ type: 'tool_request', id: '3:9', tool: 'tabs_close', args, approvalViaClient: true, chatSessionId: 'chat-1' });
+    await flushPromises();
+    expect(permissionRequests(port)).toEqual([]);
+    expect(browserMock.windows.create).toHaveBeenCalledOnce();
+  });
 });
 
 describe('bidi input channel', () => {

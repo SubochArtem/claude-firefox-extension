@@ -18,11 +18,17 @@ import { tabsClose, tabsCreate } from './tabs';
 import { tabsContext } from './tabs-context';
 import { ToolError } from './tool-error';
 
+// Where a call comes from: chatSessionId names the sidebar Claude Code session that made it.
+export interface ToolContext {
+  chatSessionId?: string;
+}
+
 type ToolHandler = (
   args: Record<string, unknown>,
   prompt: ApprovalPrompt,
   input?: BidiInputChannel,
   evaluate?: BidiEvaluateChannel,
+  context?: ToolContext,
 ) => Promise<ContentBlock[]>;
 
 const tools = new Map<string, ToolHandler>([
@@ -54,10 +60,14 @@ export async function executeTool(
   const handler = tools.get(request.tool);
   if (!handler) return errorResponse(request.id, `Unknown tool: ${request.tool}`);
   try {
+    const { chatSessionId } = request;
+    // A sidebar Claude Code session runs headless, so nobody could answer a question in its client.
+    const viaClient = request.approvalViaClient === true && chatSessionId === undefined;
     const prompt = approvalPromptFor(
-      clientApprovals && { viaClient: request.approvalViaClient === true, clientPrompt: clientApprovals.promptFor(request.id) },
+      clientApprovals && viaClient ? { viaClient, clientPrompt: clientApprovals.promptFor(request.id) } : undefined,
     );
-    const content = await handler(request.args, prompt, bidiInput, bidiEvaluate);
+    const context: ToolContext = chatSessionId === undefined ? {} : { chatSessionId };
+    const content = await handler(request.args, prompt, bidiInput, bidiEvaluate, context);
     return { type: 'tool_response', id: request.id, result: { content } };
   } catch (error) {
     if (error instanceof ToolError) return errorResponse(request.id, error.message);

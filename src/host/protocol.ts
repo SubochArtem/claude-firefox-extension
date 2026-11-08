@@ -3,6 +3,9 @@ export const NATIVE_HOST_NAME = 'claude_firefox_extension';
 export const EXTENSION_ID = 'claude-firefox-extension@localhost';
 // Must match PROMPT_TIMEOUT_MS in extension/permissions/popup-prompt.ts.
 export const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
+// Environment variable that carries a sidebar chat session's token to the MCP server Claude Code
+// starts for it; the MCP server presents the token in the bridge handshake.
+export const CHAT_TOKEN_ENV = 'CLAUDE_FIREFOX_CHAT_TOKEN';
 // A tool call may wait for the user's answer to a permission prompt before it acts, so the agent gets
 // the tool's own answer as long as the prompt and the action after it end within this time.
 export const TOOL_REQUEST_TIMEOUT_MS = PERMISSION_PROMPT_TIMEOUT_MS + 30_000;
@@ -23,6 +26,9 @@ export interface ToolRequest {
   // Set by the MCP server when its client supports elicitation: the extension then asks the user
   // through permission_request instead of its popup.
   approvalViaClient?: true;
+  // Set by the native host, never by a client, on calls from the MCP server of a sidebar chat
+  // session: that Claude Code runs headless, so the extension asks in its popup.
+  chatSessionId?: string;
 }
 
 export type ToolResponse =
@@ -43,6 +49,8 @@ export interface HostHello {
 export interface Auth {
   type: 'auth';
   proof: string;
+  // Present when the MCP server runs for a sidebar chat session (CHAT_TOKEN_ENV).
+  chatToken?: string;
 }
 
 export interface Ready {

@@ -304,6 +304,16 @@ export async function connectClient(target: BridgeTarget | string, secret?: stri
   const endpoint = typeof target === 'string' ? target : target.endpoint;
   const key = typeof target === 'string' ? secret : readBridgeJson(target.bridgeInfoPath).secret;
   if (key === undefined) throw new Error('connectClient needs a secret with a bare endpoint');
+  return authenticatedClient(endpoint, key);
+}
+
+// Connects like connectClient and presents `chatToken` in the auth message, the way the MCP server
+// of a sidebar chat session does.
+export async function connectChatClient(target: BridgeTarget, chatToken: string): Promise<BridgeClient> {
+  return authenticatedClient(target.endpoint, readBridgeJson(target.bridgeInfoPath).secret, chatToken);
+}
+
+async function authenticatedClient(endpoint: string, key: string, chatToken?: string): Promise<BridgeClient> {
   const { client, forget } = await openClient(endpoint);
   const clientNonce = randomHex();
   client.send({ type: 'hello', nonce: clientNonce });
@@ -311,7 +321,7 @@ export async function connectClient(target: BridgeTarget | string, secret?: stri
   const serverNonce = hello['nonce'];
   if (hello['type'] !== 'hello' || typeof serverNonce !== 'string') throw new Error(`unexpected host hello ${JSON.stringify(hello)}`);
   if (hello['proof'] !== proof(key, 'host', clientNonce, serverNonce)) throw new Error('the host proof is wrong');
-  client.send({ type: 'auth', proof: proof(key, 'client', clientNonce, serverNonce) });
+  client.send({ type: 'auth', proof: proof(key, 'client', clientNonce, serverNonce), ...(chatToken === undefined ? {} : { chatToken }) });
   const ready = await client.nextLine();
   if (ready['type'] !== 'ready') throw new Error(`expected ready, got ${JSON.stringify(ready)}`);
   forget();

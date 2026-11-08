@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { posix, win32 } from 'node:path';
 import { envValue, installPaths, type Env, type HostSource } from './install/paths';
-import type { ChatErrorCode } from './protocol';
+import { CHAT_TOKEN_ENV, type ChatErrorCode } from './protocol';
 
 export const CLAUDE_PATH_ENV = 'CLAUDE_FIREFOX_CLAUDE_PATH';
 const MIN_VERSION = [2, 1, 302] as const;
@@ -12,7 +12,8 @@ const CHECK_TIMEOUT_MS = 15_000;
 const CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
 // Only the user's Claude subscription may pay for the sidebar: these would switch Claude Code to an
 // API key, a token or a cloud provider.
-const DROPPED_ENV = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN']);
+// An inherited chat token is dropped too: only the session's own one is set.
+const DROPPED_ENV = new Set(['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', CHAT_TOKEN_ENV]);
 const DROPPED_ENV_PREFIX = 'CLAUDE_CODE_USE_';
 const SUBSCRIPTION_AUTH_METHOD = 'claude.ai';
 
@@ -112,12 +113,17 @@ export function claudeEnv(env: Env): Record<string, string> {
   return result;
 }
 
-/** One MCP server, `firefox`, running this same host as the MCP server. */
+/**
+ * One MCP server, `firefox`, running this same host as the MCP server. The session's token is set in
+ * claude's environment and only referenced here: claude expands `${VAR}` in the server's env, so the
+ * token never appears on a command line.
+ */
 export function mcpServerConfig(source: HostSource): string {
+  const env = { [CHAT_TOKEN_ENV]: `\${${CHAT_TOKEN_ENV}}` };
   const server =
     source.kind === 'binary'
-      ? { type: 'stdio', command: source.executable, args: ['--mcp'] }
-      : { type: 'stdio', command: source.nodePath, args: [source.entry, '--mcp'] };
+      ? { type: 'stdio', command: source.executable, args: ['--mcp'], env }
+      : { type: 'stdio', command: source.nodePath, args: [source.entry, '--mcp'], env };
   return JSON.stringify({ mcpServers: { firefox: server } });
 }
 

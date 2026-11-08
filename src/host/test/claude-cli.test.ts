@@ -152,6 +152,7 @@ describe('claudeEnv', () => {
       Claude_Code_Use_Foundry: '1',
       CLAUDE_CODE_OTHER: 'kept',
       ANTHROPIC_MODEL: 'kept',
+      CLAUDE_FIREFOX_CHAT_TOKEN: 'inherited',
       EMPTY: undefined,
     });
     expect(env).toEqual({ HOME: '/home/u', PATH: '/usr/bin', CLAUDE_CODE_OTHER: 'kept', ANTHROPIC_MODEL: 'kept' });
@@ -159,15 +160,18 @@ describe('claudeEnv', () => {
 });
 
 describe('claude chat arguments', () => {
+  // The session token stays off every command line: claude expands the reference from its own environment.
+  const TOKEN_ENV = { CLAUDE_FIREFOX_CHAT_TOKEN: '${CLAUDE_FIREFOX_CHAT_TOKEN}' };
+
   it('runs the binary itself as the MCP server', () => {
     expect(JSON.parse(mcpServerConfig({ kind: 'binary', executable: '/x/claude-firefox-host' }))).toEqual({
-      mcpServers: { firefox: { type: 'stdio', command: '/x/claude-firefox-host', args: ['--mcp'] } },
+      mcpServers: { firefox: { type: 'stdio', command: '/x/claude-firefox-host', args: ['--mcp'], env: TOKEN_ENV } },
     });
   });
 
   it('runs a development build with node', () => {
     expect(JSON.parse(mcpServerConfig({ kind: 'node', nodePath: '/usr/bin/node', entry: '/src/dist/host/index.js' }))).toEqual({
-      mcpServers: { firefox: { type: 'stdio', command: '/usr/bin/node', args: ['/src/dist/host/index.js', '--mcp'] } },
+      mcpServers: { firefox: { type: 'stdio', command: '/usr/bin/node', args: ['/src/dist/host/index.js', '--mcp'], env: TOKEN_ENV } },
     });
   });
 

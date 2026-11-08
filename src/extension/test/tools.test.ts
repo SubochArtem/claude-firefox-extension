@@ -54,9 +54,10 @@ describe('executeTool', () => {
     beforeEach(() => {
       browserMock.tabs.get.mockResolvedValue({ id: 5, windowId: 1, active: true, url: 'about:blank' });
     });
-    const navigateRequest = (approvalViaClient: boolean) => ({
+    const navigateRequest = (approvalViaClient: boolean, chatSessionId?: string) => ({
       ...request('navigate', { tabId: 5, url: 'https://unknown.example/' }),
       ...(approvalViaClient ? { approvalViaClient: true as const } : {}),
+      ...(chatSessionId === undefined ? {} : { chatSessionId }),
     });
 
     it('asks in the MCP client with the prompt for the request id when the call allows it', async () => {
@@ -65,6 +66,15 @@ describe('executeTool', () => {
       expect(approvals.promptFor).toHaveBeenCalledWith('1:7');
       expect(prompt.requestApproval).toHaveBeenCalledWith(expect.objectContaining({ host: 'unknown.example' }));
       expect(browserMock.windows.create).not.toHaveBeenCalled();
+      expect(response).toHaveProperty('error');
+    });
+
+    it.each([true, false])('opens the popup prompt for a sidebar chat session call (approvalViaClient %s)', async (viaClient) => {
+      const { approvals, prompt } = clientApprovals();
+      const response = await executeTool(navigateRequest(viaClient, 'chat-1'), approvals);
+      expect(approvals.promptFor).not.toHaveBeenCalled();
+      expect(prompt.requestApproval).not.toHaveBeenCalled();
+      expect(browserMock.windows.create).toHaveBeenCalledWith(expect.objectContaining({ type: 'popup' }));
       expect(response).toHaveProperty('error');
     });
 
