@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { NATIVE_HOST_NAME as EXTENSION_HOST_NAME } from '../../extension/protocol';
 import { BIDI_PORT_ENV, DEFAULT_BIDI_PORT } from '../bidi-client';
 import { runInstallCommand, type InstallerContext } from '../install/cli';
+import { nodeFileOps, type FileOps } from '../install/files';
 import { mcpAddCommand, remoteDebuggingNote, shellQuote } from '../install/messages';
 import { installPaths, type HostSource, type InstallPaths } from '../install/paths';
 import { installPosix, renderShellWrapper, uninstallPosix } from '../install/posix';
@@ -178,6 +179,19 @@ describe.runIf(isPosix)('install and uninstall on Linux and macOS', () => {
     expect(await readdir(paths.dir)).toEqual(['claude-firefox-host']);
   });
 
+  it('keeps files that only look like leftover copies', async () => {
+    await mkdir(paths.dir, { recursive: true });
+    const lookalikes = [
+      '.claude-firefox-host.notes.tmp',
+      '.claude-firefox-host.0123456789AB.tmp',
+      'claude-firefox-host.old-notes',
+      'claude-firefox-host.old-0123456789ab.bak',
+    ];
+    for (const name of lookalikes) await writeFile(join(paths.dir, name), '');
+    await installPosix({ paths, source: { kind: 'binary', executable: await fakeBinary('new') } });
+    expect((await readdir(paths.dir)).sort()).toEqual([...lookalikes, 'claude-firefox-host'].sort());
+  });
+
   it('reinstalls from the installed copy, also through a symlink, without copying it onto itself', async () => {
     await installPosix({ paths, source: { kind: 'binary', executable: await fakeBinary('installed') } });
     const link = join(base, 'link');
@@ -194,6 +208,24 @@ describe.runIf(isPosix)('install and uninstall on Linux and macOS', () => {
     await expect(installPosix({ paths, source: { kind: 'binary', executable: await fakeBinary('version 2') } })).rejects.toThrow(
       /^Install failed: /,
     );
+    expect(await readFile(paths.binaryPath, 'utf8')).toBe('version 1');
+    expect(await readdir(paths.dir)).toEqual(['claude-firefox-host']);
+  });
+
+  it('puts the previous binary back even when the new one cannot be removed', async () => {
+    await installPosix({ paths, source: { kind: 'binary', executable: await fakeBinary('version 1') } });
+    await rm(paths.manifestPath);
+    await mkdir(join(paths.manifestPath, 'blocker'), { recursive: true });
+    const ops: FileOps = {
+      ...nodeFileOps,
+      rm: async (target, options) => {
+        if (target === paths.binaryPath) throw Object.assign(new Error('busy'), { code: 'EBUSY' });
+        await nodeFileOps.rm(target, options);
+      },
+    };
+    await expect(
+      installPosix({ paths, source: { kind: 'binary', executable: await fakeBinary('version 2') }, ops }),
+    ).rejects.toThrow(/^Install failed: /);
     expect(await readFile(paths.binaryPath, 'utf8')).toBe('version 1');
     expect(await readdir(paths.dir)).toEqual(['claude-firefox-host']);
   });
@@ -303,6 +335,20 @@ describe.runIf(process.platform === 'linux')('development install through the bu
     expect(JSON.parse(await readFile(paths.manifestPath, 'utf8'))).toMatchObject({ path: paths.wrapperPath });
     expect(stdout).toContain(`claude mcp add firefox -- ${shellQuote(process.execPath)} ${shellQuote(bundledHost)} --mcp`);
     expect(stdout).toContain(BIDI_PORT_ENV);
+  });
+
+  it('finishes quietly when stdout is closed early', async () => {
+    const child = spawn(process.execPath, [bundledHost, 'install'], {
+      env: { PATH: process.env['PATH'], HOME: home, XDG_DATA_HOME: dataHome },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stdout.destroy();
+    let stderr = '';
+    child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString()));
+    const code = await new Promise<number | null>((resolve) => child.on('close', resolve));
+    expect(stderr).toBe('');
+    expect(code).toBe(0);
+    expect(existsSync(installPaths('linux', { XDG_DATA_HOME: dataHome }, home).manifestPath)).toBe(true);
   });
 
   it('falls back to ~/.local/share without XDG_DATA_HOME', async () => {

@@ -36,6 +36,10 @@ async function main(args: string[]): Promise<void> {
     case 'install':
     case 'print-paths':
     case 'uninstall':
+      // `install | head -1` closes stdout early; the rest of the output is not needed then.
+      process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+        if (error.code !== 'EPIPE') throw error;
+      });
       process.exitCode = await runInstallCommand(command.kind, {
         platform: process.platform,
         env: process.env,

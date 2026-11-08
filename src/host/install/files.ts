@@ -39,9 +39,15 @@ function randomSuffix(): string {
   return randomBytes(6).toString('hex');
 }
 
+const RANDOM_SUFFIX = /^[0-9a-f]{12}$/;
+
 function isStaleCopy(name: string, target: string): boolean {
   const base = basename(target);
-  return name.startsWith(`${base}.old-`) || (name.startsWith(`.${base}.`) && name.endsWith('.tmp'));
+  if (name.startsWith(`${base}.old-`)) return RANDOM_SUFFIX.test(name.slice(`${base}.old-`.length));
+  if (name.startsWith(`.${base}.`) && name.endsWith('.tmp')) {
+    return RANDOM_SUFFIX.test(name.slice(`.${base}.`.length, -'.tmp'.length));
+  }
+  return false;
 }
 
 /**
@@ -63,9 +69,13 @@ export async function removeStaleCopies(target: string, ops: FileOps = nodeFileO
   return left;
 }
 
+// The default file systems of Windows and macOS are case-insensitive.
+const CASE_INSENSITIVE_PATHS = process.platform === 'win32' || process.platform === 'darwin';
+
 async function samePath(a: string, b: string): Promise<boolean> {
   try {
-    return (await fs.realpath(a)) === (await fs.realpath(b));
+    const [realA, realB] = [await fs.realpath(a), await fs.realpath(b)];
+    return CASE_INSENSITIVE_PATHS ? realA.toLowerCase() === realB.toLowerCase() : realA === realB;
   } catch {
     return false;
   }
@@ -115,8 +125,11 @@ export async function placeExecutable(source: string, target: string, ops: FileO
   }
   return {
     async rollback() {
-      await ops.rm(target, { force: true });
-      await putBack();
+      try {
+        await ops.rm(target, { force: true });
+      } finally {
+        await putBack();
+      }
     },
     async commit() {
       if (aside !== undefined) await ops.rm(aside, { force: true }).catch(() => undefined);
