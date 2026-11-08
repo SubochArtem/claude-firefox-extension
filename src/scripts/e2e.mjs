@@ -11,15 +11,20 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 // @ts-expect-error web-ext ships no type declarations.
 import webExt from 'web-ext';
+import { binaryPaths } from './build-binary-lib.mjs';
 import { isolatedXdgEnv, localRunSafety, pathsOutside } from './e2e-safety.mjs';
 
 // End-to-end check against a real headless Firefox: installs the native messaging host, loads the
 // built extension, drives it through the MCP server and checks the bridge from outside. It changes
 // the native host registration of the environment it runs in, so it only runs in CI unless --force.
 // A local --force run is confined to a temporary HOME and XDG_RUNTIME_DIR, see e2e-safety.mjs.
+// With --binary the single executable installs itself and the installed copy runs as both the MCP
+// server and the native host; without it the development build is installed by install-host.mjs.
 
 const APP_NAME = 'claude-firefox-extension';
 const NATIVE_HOST_NAME = 'claude_firefox_extension';
+// Must match EXTENSION_ID in host/protocol.ts: Firefox passes it to a native host it starts.
+const EXTENSION_ID = 'claude-firefox-extension@localhost';
 const NOT_CONNECTED =
   'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
 const BRIDGE_TIMEOUT_MS = 90_000;
@@ -40,7 +45,9 @@ const root = join(import.meta.dirname, '..');
 const hostEntry = join(root, 'dist/host/index.js');
 const extensionDir = join(root, 'dist/extension');
 const installer = join(root, 'scripts/install-host.mjs');
+const binary = binaryPaths(root, process.platform).binary;
 const force = process.argv.includes('--force');
+const useBinary = process.argv.includes('--binary');
 const inCi = process.env['CI'] === 'true' || process.env['CI'] === '1';
 const run = promisify(execFile);
 
@@ -228,10 +235,16 @@ function readBridgeJson(path) {
   return valid ? value : undefined;
 }
 
-/** @param {string[]} args */
-async function runInstaller(args) {
+/** The installed host that the MCP server runs as in --binary mode, from `install --print-paths`. */
+let installedBinary = '';
+
+/** @param {'install' | 'print-paths' | 'uninstall'} action */
+async function runInstaller(action) {
+  const [file, args] = useBinary
+    ? [binary, action === 'print-paths' ? ['install', '--print-paths'] : [action]]
+    : [process.execPath, [installer, ...{ install: [], 'print-paths': ['--print-paths'], uninstall: ['--uninstall'] }[action]]];
   try {
-    const { stdout, stderr } = await run(process.execPath, [installer, ...args], { cwd: root });
+    const { stdout, stderr } = await run(file, args, { cwd: root });
     return { code: 0, output: `${stdout}${stderr}` };
   } catch (error) {
     const failed = /** @type {{ code?: number, stdout?: string, stderr?: string }} */ (error);
@@ -378,8 +391,8 @@ function mcpEnv() {
 async function startMcp() {
   const env = mcpEnv();
   const transport = new StdioClientTransport({
-    command: process.execPath,
-    args: [hostEntry, '--mcp'],
+    command: useBinary ? installedBinary : process.execPath,
+    args: useBinary ? ['--mcp'] : [hostEntry, '--mcp'],
     ...(env ? { env } : {}),
     stderr: 'pipe',
   });
@@ -563,6 +576,7 @@ async function main() {
     for (const path of [hostEntry, join(extensionDir, 'manifest.json')]) {
       check(existsSync(path), `${path} is missing; run \`npm run build\` first`);
     }
+    if (useBinary) check(existsSync(binary), `${binary} is missing; run \`npm run build:binary\` first`);
     firefoxBinary = findFirefox();
     const manifest = JSON.parse(await readFile(join(extensionDir, 'manifest.json'), 'utf8'));
     const minimum = manifest?.browser_specific_settings?.gecko?.strict_min_version;
@@ -578,31 +592,36 @@ async function main() {
     return `Firefox ${version ?? '(unknown version)'} at ${firefoxBinary}; bridge.json expected at ${infoPath}`;
   });
 
-  if (localRun) {
+  await step('the installer names the paths it writes', async () => {
+    const { code, output } = await runInstaller('print-paths');
+    check(code === 0, `install --print-paths exited ${code}:\n${output}`);
+    const line = output.split('\n').find((text) => text.startsWith('{'));
+    check(line !== undefined, `install --print-paths printed no paths:\n${output}`);
+    const { manifest, launcher } = JSON.parse(line);
+    check(typeof manifest === 'string' && typeof launcher === 'string', `unexpected install paths: ${line}`);
+    log(`installer will write manifest ${manifest}`);
+    log(`installer will write launcher ${launcher}`);
+    if (useBinary) installedBinary = launcher;
+    if (!localRun) return;
     const { home } = localRun;
-    await step('the installer writes only inside the temporary HOME', async () => {
-      const { code, output } = await runInstaller(['--print-paths']);
-      check(code === 0, `install-host --print-paths exited ${code}:\n${output}`);
-      const line = output.split('\n').find((text) => text.startsWith('{'));
-      check(line !== undefined, `install-host --print-paths printed no paths:\n${output}`);
-      const { manifest, wrapper } = JSON.parse(line);
-      check(typeof manifest === 'string' && typeof wrapper === 'string', `unexpected install-host paths: ${line}`);
-      log(`installer will write manifest ${manifest}`);
-      log(`installer will write wrapper  ${wrapper}`);
-      const outside = pathsOutside(home, [manifest, wrapper]);
-      check(outside.length === 0, `refusing to install: ${outside.join(', ')} outside the temporary HOME ${home}`);
-      for (const path of [manifest, wrapper]) {
-        const link = symlinkOnPath(home, path);
-        check(link === undefined, `refusing to install: ${link} on the way to ${path} is a symlink`);
-      }
-      return `inside ${home}`;
-    });
-  }
+    const outside = pathsOutside(home, [manifest, launcher]);
+    check(outside.length === 0, `refusing to install: ${outside.join(', ')} outside the temporary HOME ${home}`);
+    for (const path of [manifest, launcher]) {
+      const link = symlinkOnPath(home, path);
+      check(link === undefined, `refusing to install: ${link} on the way to ${path} is a symlink`);
+    }
+    return `inside ${home}`;
+  });
 
-  await step('install the native messaging host', async () => {
-    const { code, output } = await runInstaller([]);
+  await step(useBinary ? 'the binary installs itself' : 'install the native messaging host', async () => {
+    const { code, output } = await runInstaller('install');
     installed = true;
-    check(code === 0, `install-host exited ${code}:\n${output}`);
+    check(code === 0, `install exited ${code}:\n${output}`);
+    if (!useBinary) return;
+    check(existsSync(installedBinary), `${installedBinary} was not installed`);
+    const quoted = isWindows ? `"${installedBinary}"` : `'${installedBinary.replaceAll("'", `'\\''`)}'`;
+    check(output.includes(`claude mcp add firefox -- ${quoted} --mcp`), `install did not print the command for ${installedBinary}:\n${output}`);
+    return installedBinary;
   });
 
   await step('start headless Firefox with the extension and wait for bridge.json', async () => {
@@ -761,7 +780,8 @@ async function main() {
     const spawnLog = join(countDir, 'spawns.log');
     await writeFile(
       preload,
-      "if (process.argv.includes('--native-host')) require('node:fs').appendFileSync(process.env.CFE_E2E_SPAWN_LOG, `${process.pid}\\n`);\n",
+      `if (process.argv.includes('--native-host') || process.argv.includes(${JSON.stringify(EXTENSION_ID)})) ` +
+        "require('node:fs').appendFileSync(process.env.CFE_E2E_SPAWN_LOG, `${process.pid}\\n`);\n",
     );
     // NODE_OPTIONS treats a backslash inside quotes as an escape; Node accepts forward slashes on Windows.
     const nodeOptions = [process.env['NODE_OPTIONS'], `--require "${preload.replaceAll('\\', '/')}"`].filter(Boolean).join(' ');
@@ -802,11 +822,15 @@ async function main() {
   });
 
   await step('uninstall the native messaging host', async () => {
-    const { code, output } = await runInstaller(['--uninstall']);
-    check(code === 0, `uninstall-host exited ${code}:\n${output}`);
+    // The MCP server runs the installed binary, which Windows does not let anyone delete while it runs.
+    await mcpClient?.close();
+    mcpClient = undefined;
+    const { code, output } = await runInstaller('uninstall');
+    check(code === 0, `uninstall exited ${code}:\n${output}`);
     installed = false;
     if (isWindows) check(!(await registryKeyExists()), 'the registry key is still present after uninstall');
     else check(!existsSync(posixManifestPath()), `${posixManifestPath()} is still present after uninstall`);
+    if (useBinary) check(!existsSync(installedBinary), `${installedBinary} is still present after uninstall:\n${output}`);
   });
 }
 
@@ -818,8 +842,8 @@ async function cleanup() {
     if (!hasExited(instance.firefox)) await stopFirefox(instance);
   }
   if (installed) {
-    const { code, output } = await runInstaller(['--uninstall']);
-    if (code !== 0) log(`cleanup: uninstall-host exited ${code}:\n${output}`);
+    const { code, output } = await runInstaller('uninstall');
+    if (code !== 0) log(`cleanup: uninstall exited ${code}:\n${output}`);
   }
   for (const dir of tempDirs) {
     await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }).catch((error) => {

@@ -41,7 +41,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Accessibility tree: DOM heuristics (extensions have no accessibility API), top frame only, open shadow roots walked, hidden elements always excluded, `ref_N` refs in an isolated-world WeakRef registry that lives until the document unloads, `find` searches the tree locally, happy-dom for DOM tests; see [Accessibility tree](docs/decisions.md#accessibility-tree).
 - DevTools tools: `resize_window` resizes normal windows only, with no site permission, resets the window state to normal and reports the actual size; `javascript_tool` runs through BiDi `script.evaluate` in the page's main realm (bypasses page CSP), falling back to `scripting.executeScript` in the MAIN world only when BiDi is unavailable, behind an `execute_javascript` site permission; console and network capture start per tab on the first read call, console capture through a MAIN-world content script registered at `document_start` for the hosts of tracked tabs, network capture through top-level non-blocking `webRequest` listeners into a per-tab list of 1,000 requests in `storage.session` that starts over when the tab moves to another site; see [DevTools tools](docs/decisions.md#devtools-tools).
 - Sidebar chat: the sidebar page calls the Anthropic Messages API directly with a user-supplied API key in `storage.local` and runs the agent loop itself (closing the sidebar stops it, history lives until then); own fetch + SSE client and own textContent-only Markdown renderer, no dependencies; tool definitions shared with the MCP server; a local Claude Code backend is a later feature, driving a subscription-logged `claude -p` needs Anthropic's written confirmation, claude.ai login is not available to third parties; see [Sidebar chat](docs/decisions.md#sidebar-chat).
-- Packaging: the native host ships as a Node.js single executable application (SEA, no new runtime or bundler), one binary per OS and architecture; it will install itself (`install`/`uninstall` subcommands) and be released on GitHub Releases; binaries are not code-signed for now; see [Packaging](docs/decisions.md#packaging).
+- Packaging: the native host ships as a Node.js single executable application (SEA, no new runtime or bundler), one binary per OS and architecture; it installs itself (`install`/`uninstall` subcommands, installer in `host/install/` shared with `npm run install-host`), the manifest names the binary directly and the native host mode is detected from the extension id Firefox passes, an upgrade renames a running binary aside (Windows), and it will be released on GitHub Releases; binaries are not code-signed for now; see [Packaging](docs/decisions.md#packaging).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
@@ -74,8 +74,8 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
 - [x] `feature/devtools-tools`: `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`.
 - [x] `feature/sidebar-chat`: chat in a Firefox sidebar; options decided at its start after checking Anthropic's terms: a sidebar that talks to the user's local Claude Code through the native host (user signs in to Claude Code as usual), or direct Anthropic API calls with the user's API key. Signing in to claude.ai from the extension like Claude in Chrome is not available to third parties.
-- [ ] `feature/sidebar-claude-code`: the sidebar talks to the user's local Claude Code through the native host; driving a subscription-logged `claude -p` needs Anthropic's written confirmation first.
-- [ ] `feature/openai-provider`: an OpenAI-compatible `ChatProvider` for the sidebar chat.
+- [ ] `feature/sidebar-claude-code`: the sidebar talks to the user's local Claude Code through the native host; next feature after packaging.
+- [ ] `feature/multi-provider-fork`: a separate extension forked from this one, where the user enters an API URL and API key to work with different AI providers; designed at its start.
 - [ ] `feature/packaging`: installation without Node.js for end users: a native host executable and an installer per OS.
 
 ## Repository layout
@@ -83,7 +83,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 ```
 CLAUDE.md
 .gitignore
-.github/workflows/ci.yml  CI on Linux, Windows, macOS: typecheck, build, lint, test, single executable build and smoke check, then e2e in real Firefox (docs/decisions.md#ci)
+.github/workflows/ci.yml  CI on Linux, Windows, macOS: typecheck, build, lint, test, single executable build and smoke check, then e2e in real Firefox through the self-installed binary (docs/decisions.md#ci)
 docs/
   decisions.md         design details: bridge protocol, Windows installer, threat model, tests, CI, e2e
 src/                   npm package root; every command is run from here
@@ -99,11 +99,10 @@ src/                   npm package root; every command is run from here
   scripts/smoke-binary.mjs  smoke check of the built binary: usage without arguments, MCP initialize answered as --mcp, 30 s timeout per run
   scripts/bundle-guard.mjs  metafile inputs from an npm package; the build fails when the extension bundle includes zod
   scripts/build-time-modules.mjs  esbuild plugin: runs listed modules in Node at build time and inlines their exports as JSON (shared/anthropic-tools.ts in the extension build, so zod is not shipped)
-  scripts/install-host.mjs  installs/uninstalls the native messaging manifest and host wrapper (Linux, macOS, Windows)
-  scripts/install-host-lib.mjs  Windows installer logic: paths, .bat wrapper, icacls/reg/whoami arguments and flows; remote debugging start note
-  scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions
+  scripts/install-host.mjs  runs the built host's install/uninstall (dist/host/index.js) for the development build
+  scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions; --binary installs and runs the single executable
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
-  scripts/test/        installer tests (against a temp HOME), e2e safety tests, build-time module, bundle guard and binary build tests
+  scripts/test/        install-host script, e2e safety, build-time module, bundle guard and binary build tests
   shared/              code used by both host and extension
     tsconfig.json      shared type check (no DOM, no Node), test/ included
     test/              tests of the Anthropic tool definitions
@@ -208,9 +207,17 @@ src/                   npm package root; every command is run from here
       tool-error.ts    ToolError: expected failure whose message reaches the agent without the generic prefix
   host/                native messaging host + MCP server, one entry point
     tsconfig.json      host type check (Node types, no DOM), test/ included
-    test/              unit, process and fake-timer tests; helpers.ts (temp dirs, endpoints, fake extension), fake-bidi.ts (WebDriver BiDi WebSocket server), global-setup.ts
-    index.ts           dispatches by flag: --native-host or --mcp
-    protocol.ts        message types for both channels, shared constants
+    test/              unit, process, fake-timer and installer tests; helpers.ts (temp dirs, endpoints, fake extension), fake-bidi.ts (WebDriver BiDi WebSocket server), global-setup.ts
+    index.ts           runs the command from host/command.ts: native host, MCP server, install, uninstall or usage
+    command.ts         command line parsing: --native-host, --mcp, install [--print-paths], uninstall, and the native host mode from the extension id Firefox passes
+    protocol.ts        message types for both channels, shared constants (native host name, extension id)
+    install/           installer of the native host, run as `install`/`uninstall` by the single executable and by npm run install-host
+      paths.ts         install directory, binary, wrapper and manifest paths per OS; host source (binary or Node + build); manifest content
+      files.ts         launcher and manifest writes with rollback; binary copy through a temp file with the old one renamed aside (upgrade of a running exe); removal of stale and in-use copies
+      posix.ts         Linux and macOS install/uninstall, shell wrapper for a development build
+      windows.ts       Windows install/uninstall: hardened directory (whoami, icacls), .bat wrapper, HKCU registration with rollback, path warnings
+      messages.ts      claude mcp add command (installed binary or Node + build), remote debugging start note
+      cli.ts           install, print-paths and uninstall commands with their output and exit codes
     socket-path.ts     bridge socket path resolution and permissions; random pipe names on Windows
     bridge-info.ts     bridge.json location, atomic write, validated read, removal on exit
     handshake.ts       bridge handshake: nonces, HMAC proofs, message parsers, limits, client side on a socket
@@ -227,7 +234,7 @@ src/                   npm package root; every command is run from here
     mcp-server.ts      MCP server over stdio: registers the shared tool definitions, forwards calls to the native host, asks permissions by elicitation
   node_modules/        (not committed)
   dist/extension/      built extension, loaded by web-ext (not committed)
-  dist/host/index.js   bundled host for Node, run as `node dist/host/index.js --native-host|--mcp` (not committed)
+  dist/host/index.js   bundled host for Node, run as `node dist/host/index.js --native-host|--mcp|install|uninstall` (not committed)
   dist/host/sea.cjs    the same host as CommonJS, the main script of the single executable (not committed)
   dist/bin/claude-firefox-host  host single executable for the current platform, `.exe` on Windows (not committed)
   dist/sea/            intermediate files of the binary build: sea-config.json, the preparation blob with postject (not committed)
@@ -246,8 +253,9 @@ Run every command from `src/` (`cd src && npm run build`).
 - `npm test`: run the Vitest suite once (no build, Firefox or network; temp dirs under `/tmp` only). `npm run test:watch` for watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).
 - `npm run start`: run the built extension in a temporary Firefox profile with `web-ext run` (build first).
-- `npm run install-host`: register the native messaging host for Firefox (build first) and print the `claude mcp add` command; paths per OS in [docs/decisions.md](docs/decisions.md#native-host-installation-paths). Snap and Flatpak Firefox are not supported.
-- `npm run uninstall-host`: remove the manifest and the wrapper (and the registry key on Windows).
-- `npm run e2e`: end-to-end check in a real headless Firefox (build first); changes the host registration, so it runs only with `CI=true|1` or `--force`, and a local `--force` run is Linux only inside a temporary `HOME` and `XDG_RUNTIME_DIR` under `/tmp` ([E2E](docs/decisions.md#e2e)). `E2E_FIREFOX` overrides the Firefox binary. Example: `RT=$(mktemp -d /tmp/cfe-rt-XXXX); H=$(mktemp -d /tmp/cfe-home-XXXX); HOME=$H XDG_RUNTIME_DIR=$RT npm run e2e -- --force`.
-- `claude mcp add firefox -- '<node>' '<abs path>/src/dist/host/index.js' --mcp` (double quotes on Windows): register the MCP server with Claude Code, once, using the exact command printed by `npm run install-host`.
+- `npm run install-host`: register the development build as the native messaging host for Firefox (build first; runs `node dist/host/index.js install`, which writes a wrapper) and print the `claude mcp add` command; paths per OS in [docs/decisions.md](docs/decisions.md#native-host-installation-paths). Snap and Flatpak Firefox are not supported.
+- `npm run uninstall-host`: remove the manifest, the wrapper and an installed binary (and the registry key on Windows); build first.
+- `dist/bin/claude-firefox-host install` (or a downloaded binary): copy the binary into the per-user install directory, register it with Firefox and print `claude mcp add firefox -- '<installed binary>' --mcp`; run it again to upgrade. `claude-firefox-host uninstall` removes it all.
+- `npm run e2e`: end-to-end check in a real headless Firefox (build first); changes the host registration, so it runs only with `CI=true|1` or `--force`, and a local `--force` run is Linux only inside a temporary `HOME` and `XDG_RUNTIME_DIR` under `/tmp` ([E2E](docs/decisions.md#e2e)). `E2E_FIREFOX` overrides the Firefox binary. `--binary` installs and runs the single executable instead (`npm run build:binary` first; CI runs it this way). Example: `RT=$(mktemp -d /tmp/cfe-rt-XXXX); H=$(mktemp -d /tmp/cfe-home-XXXX); HOME=$H XDG_RUNTIME_DIR=$RT npm run e2e -- --force --binary`.
+- `claude mcp add firefox -- '<node>' '<abs path>/src/dist/host/index.js' --mcp` (double quotes on Windows): register the MCP server with Claude Code, once, using the exact command printed by `npm run install-host` (or by the binary's `install`).
 - Using the sidebar chat: open the extension's options page in `about:addons`, save an Anthropic API key (and pick a model), click "Grant access" for api.anthropic.com (the sidebar offers the same button), then open the "Claude" sidebar (View > Sidebar, or the sidebar button). The chat acts on the active tab of the sidebar's window; site permissions are asked in a popup.
