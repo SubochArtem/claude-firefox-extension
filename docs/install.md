@@ -60,9 +60,9 @@ Run the `claude mcp add firefox -- ...` command exactly as `install` printed it 
 
 ## 5. Load the extension
 
-The extension package is not signed by Mozilla yet, so release Firefox cannot install it permanently until the extension is signed on addons.mozilla.org (`feature/amo-signing`). Until then:
-
 The extension appears in Firefox as "Claude Sidebar".
+
+The extension package is not signed by Mozilla yet, so release Firefox cannot install it permanently until the extension is signed on addons.mozilla.org (`feature/amo-signing`). Until then:
 
 - Release Firefox: open `about:debugging`, This Firefox, Load Temporary Add-on, and pick the `.xpi`. The extension is removed when Firefox closes and has to be loaded again after every start.
 - Firefox Developer Edition or Nightly: set `xpinstall.signatures.required` to `false` in `about:config`, then in `about:addons` use the gear menu > Install Add-on From File and pick the `.xpi`. This install is permanent.
