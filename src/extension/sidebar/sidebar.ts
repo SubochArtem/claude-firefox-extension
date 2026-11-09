@@ -2,12 +2,13 @@ import { type AgentLoopEvents, type ChatToolResult, runAgentLoop } from '../chat
 import { AnthropicProvider } from '../chat/anthropic-provider';
 import type { ChatMessage, ToolUseBlock } from '../chat/provider';
 import { type BoundTab, buildSystemPrompt } from '../chat/system-prompt';
-import { ANTHROPIC_API_ORIGIN, loadChatSettings } from '../chat-settings';
+import { ANTHROPIC_API_ORIGIN, type ChatBackend, loadChatSettings } from '../chat-settings';
 import { isRecord } from '../tools/navigation-input';
 import { type ChatChange, type ChatItem, ChatSession } from './chat-session';
+import { ClaudeCodeSession } from './claude-code-session';
 import { renderMarkdown } from './markdown';
-import { affectsSetup, type SetupState, setupState } from './setup-state';
-import { CHAT_TOOL_CALL_MESSAGE } from './sidebar-constants';
+import { affectsSetup, CHECKING_CLAUDE_CODE, claudeCodeSetupState, type SetupState, setupState } from './setup-state';
+import { CHAT_TOOL_CALL_MESSAGE, CLAUDE_CODE_PORT } from './sidebar-constants';
 
 const apiAccess = { origins: [ANTHROPIC_API_ORIGIN] };
 const SCROLL_SLACK_PX = 40;
@@ -25,6 +26,7 @@ const newChatButton = element<HTMLButtonElement>('new-chat');
 const views = new Map<number, HTMLElement>();
 let setup: SetupState = { kind: 'needs_key', text: '' };
 let setupGeneration = 0;
+let backend: ChatBackend | undefined;
 
 // The sidebar's own window: each window has its own sidebar document.
 const currentWindow = browser.windows.getCurrent();
@@ -103,23 +105,73 @@ function render(change: ChatChange): void {
   if (atBottom) messages.scrollTop = messages.scrollHeight;
 }
 
-const session = new ChatSession(runLoop, render);
+const apiSession = new ChatSession(runLoop, (change) => {
+  if (backend !== 'claude-code') render(change);
+});
+const claudeCodeSession = new ClaudeCodeSession({
+  connect: () => browser.runtime.connect({ name: CLAUDE_CODE_PORT }),
+  windowId: async () => (await currentWindow).id,
+  model: async () => (await loadChatSettings()).model,
+  onChange: (change) => {
+    if (backend === 'claude-code') render(change);
+  },
+});
+
+function activeSession(): ChatSession | ClaudeCodeSession {
+  return backend === 'claude-code' ? claudeCodeSession : apiSession;
+}
 
 function renderControls(): void {
-  stopButton.disabled = !session.running;
-  newChatButton.disabled = session.running;
+  const { running } = activeSession();
+  stopButton.disabled = !running;
+  newChatButton.disabled = running;
   prompt.disabled = setup.kind !== 'ready';
 }
 
-async function renderSetup(generation: number): Promise<void> {
-  const [{ apiKey }, granted] = await Promise.all([loadChatSettings(), browser.permissions.contains(apiAccess)]);
-  if (generation !== setupGeneration) return;
-  setup = setupState(apiKey, granted);
+// The Claude Code session cannot outlive a switch away from it; the API conversation stays until New chat.
+function switchBackend(next: ChatBackend): void {
+  if (backend === next) return;
+  const previous = backend;
+  backend = next;
+  if (previous === 'claude-code') claudeCodeSession.newChat();
+  if (previous === 'api') apiSession.stop();
+  render({ type: 'clear' });
+  for (const item of activeSession().items) render({ type: 'add', item });
+  renderControls();
+}
+
+function showSetup(state: SetupState): void {
+  setup = state;
   element('setup').hidden = setup.kind === 'ready';
   element('setup-text').textContent = setup.kind === 'ready' ? '' : setup.text;
   element('open-options').hidden = setup.kind !== 'needs_key';
   element('grant-access').hidden = setup.kind !== 'needs_access';
+  element('check-again').hidden = setup.kind !== 'needs_claude_code';
   renderControls();
+}
+
+async function claudeCodeSetup(): Promise<SetupState> {
+  try {
+    return claudeCodeSetupState(await claudeCodeSession.status());
+  } catch (error) {
+    return { kind: 'needs_claude_code', text: `Could not check Claude Code: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
+async function renderSetup(generation: number): Promise<void> {
+  const settings = await loadChatSettings();
+  if (generation !== setupGeneration) return;
+  switchBackend(settings.backend);
+  if (settings.backend === 'claude-code') {
+    // A recheck during a turn keeps the prompt and the controls as they are.
+    if (!claudeCodeSession.running) showSetup(CHECKING_CLAUDE_CODE);
+    const state = await claudeCodeSetup();
+    if (generation === setupGeneration) showSetup(state);
+    return;
+  }
+  const granted = await browser.permissions.contains(apiAccess);
+  if (generation !== setupGeneration) return;
+  showSetup(setupState(settings.apiKey, granted));
 }
 
 function refreshSetup(): void {
@@ -131,9 +183,20 @@ function refreshSetup(): void {
   });
 }
 
+// The Claude Code check runs claude twice, so a change of the key or the model does not repeat it.
+function onChatSettingsChanged(): void {
+  loadChatSettings().then(
+    (settings) => {
+      if (settings.backend === 'api' || settings.backend !== backend) refreshSetup();
+    },
+    () => refreshSetup(),
+  );
+}
+
 prompt.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter' || event.shiftKey || event.isComposing) return;
   event.preventDefault();
+  const session = activeSession();
   if (session.running || setup.kind !== 'ready') return;
   const text = prompt.value;
   if (text.trim() === '') return;
@@ -141,11 +204,13 @@ prompt.addEventListener('keydown', (event) => {
   void session.send(text);
 });
 
-stopButton.addEventListener('click', () => session.stop());
+stopButton.addEventListener('click', () => activeSession().stop());
 newChatButton.addEventListener('click', () => {
-  session.newChat();
+  activeSession().newChat();
   prompt.focus();
 });
+
+element('check-again').addEventListener('click', refreshSetup);
 
 element('open-options').addEventListener('click', () => {
   void browser.runtime.openOptionsPage();
@@ -156,10 +221,14 @@ element('grant-access').addEventListener('click', () => {
   browser.permissions.request(apiAccess).then(refreshSetup, refreshSetup);
 });
 
-browser.permissions.onAdded.addListener(refreshSetup);
-browser.permissions.onRemoved.addListener(refreshSetup);
+function onApiAccessChanged(): void {
+  if (backend !== 'claude-code') refreshSetup();
+}
+
+browser.permissions.onAdded.addListener(onApiAccessChanged);
+browser.permissions.onRemoved.addListener(onApiAccessChanged);
 browser.storage.local.onChanged.addListener((changes) => {
-  if (affectsSetup(changes)) refreshSetup();
+  if (affectsSetup(changes)) onChatSettingsChanged();
 });
 
 refreshSetup();

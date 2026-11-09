@@ -1,4 +1,13 @@
-import { ANTHROPIC_API_ORIGIN, CHAT_MODELS, CHAT_SETTINGS_STORAGE_KEY, type ChatModel, loadChatSettings, saveChatSettings, validApiKey } from '../chat-settings';
+import {
+  ANTHROPIC_API_ORIGIN,
+  CHAT_MODELS,
+  CHAT_SETTINGS_STORAGE_KEY,
+  type ChatBackend,
+  type ChatModel,
+  loadChatSettings,
+  saveChatSettings,
+  validApiKey,
+} from '../chat-settings';
 import { loadPermissions, PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 import { type AgentTabs, loadSettings, saveSettings, SETTINGS_STORAGE_KEY } from '../settings';
 import type { ClaudeCodeStatusReply } from '../chat/claude-code-relay';
@@ -86,6 +95,7 @@ for (const input of agentTabInputs) {
   });
 }
 
+const backendInputs = [...document.querySelectorAll<HTMLInputElement>('input[name="chatBackend"]')];
 const apiKeyInput = element<HTMLInputElement>('api-key');
 const modelSelect = element<HTMLSelectElement>('chat-model');
 const grantButton = element<HTMLButtonElement>('api-access-grant');
@@ -101,9 +111,10 @@ modelSelect.replaceChildren(
 );
 
 async function renderChatSettings(): Promise<void> {
-  const { apiKey, model } = await loadChatSettings();
+  const { apiKey, model, backend } = await loadChatSettings();
   element('api-key-status').textContent = apiKeyStatus(apiKey);
   modelSelect.value = model;
+  for (const input of backendInputs) input.checked = input.value === backend;
 }
 
 async function renderApiAccess(): Promise<void> {
@@ -122,7 +133,7 @@ async function renderClaudeCodeStatus(): Promise<void> {
 let chatSettingsUpdate: Promise<void> = Promise.resolve();
 
 // Each update reads and writes the whole record, so updates run one at a time to keep each other's changes.
-function updateChatSettings(change: { apiKey?: string; model?: ChatModel }): Promise<void> {
+function updateChatSettings(change: { apiKey?: string; model?: ChatModel; backend?: ChatBackend }): Promise<void> {
   const update = chatSettingsUpdate.then(async () => {
     await saveChatSettings({ ...(await loadChatSettings()), ...change });
     showStatus('');
@@ -153,6 +164,19 @@ element('api-key-clear').addEventListener('click', () => {
   apiKeyInput.value = '';
   reportFailure(updateChatSettings({ apiKey: '' }), 'clear the API key');
 });
+
+for (const input of backendInputs) {
+  input.addEventListener('change', () => {
+    if (!input.checked) return;
+    reportFailure(
+      updateChatSettings({ backend: input.value as ChatBackend }).catch((error: unknown) => {
+        reportFailure(renderChatSettings(), 'load the chat settings');
+        throw error;
+      }),
+      'save the chat backend',
+    );
+  });
+}
 
 modelSelect.addEventListener('change', () => {
   reportFailure(

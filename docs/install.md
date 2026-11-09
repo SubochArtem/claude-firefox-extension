@@ -81,6 +81,16 @@ Screenshots and page tools need the extension's access to all websites. In `abou
 
 The extension still asks before acting on each site: Claude Code shows the question, or Firefox opens a small prompt window.
 
+## Using the sidebar with local Claude Code
+
+The "Claude" sidebar (View > Sidebar) can run your installed Claude Code instead of calling the Anthropic API with an API key:
+
+1. Install Claude Code 2.1.302 or newer and log in with your Claude account: run `claude` in a terminal and log in, or run `claude auth login`. Only a Claude subscription login is used; an API key or a cloud provider login is not.
+2. In `about:addons`, open the extension's options and choose "Local Claude Code" under "Sidebar chat". The model chosen there applies to this mode too. The status line below shows whether Claude Code was found and is logged in.
+3. Open the sidebar and type a prompt. The native host starts Claude Code for the conversation; "New chat" ends it. If Claude Code is not found, set `CLAUDE_FIREFOX_CLAUDE_PATH` to its full path in the environment Firefox is started from.
+
+Site permissions are always asked in a small Firefox prompt window in this mode, not in Claude Code.
+
 ## Upgrading
 
 Download the new binary and run its `install` as in steps 2 and 3. It replaces the installed copy, even while Firefox or Claude Code still run the old one; restart Firefox and Claude Code to use the new version. The `claude mcp add` registration stays valid. Load the new extension package as in step 5.
