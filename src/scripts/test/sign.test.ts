@@ -90,6 +90,12 @@ describe('sign script', () => {
     expect(JSON.parse(stdout)).toEqual({ args: SIGN_ARGS, key: 'env-key', secret: 'env-secret' });
   });
 
+  it('prefers a key from the environment over a different value in .env', async () => {
+    await writeFile(join(packageDir, '.env'), 'WEB_EXT_API_KEY=file-key\nWEB_EXT_API_SECRET=file-secret\n');
+    const { stdout } = await runScript({ WEB_EXT_API_KEY: 'env-key' });
+    expect(JSON.parse(stdout)).toEqual({ args: SIGN_ARGS, key: 'env-key', secret: 'file-secret' });
+  });
+
   it("exits with web-ext's exit code", async () => {
     await expect(runScript({ WEB_EXT_API_KEY: 'k', WEB_EXT_API_SECRET: 's', FAKE_EXIT: '3' })).rejects.toMatchObject({
       code: 3,
