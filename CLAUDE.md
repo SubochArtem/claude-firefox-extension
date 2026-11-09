@@ -44,7 +44,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Packaging: the native host ships as a Node.js single executable application (SEA, no new runtime or bundler), one binary per OS and architecture; it installs itself (`install`/`uninstall` subcommands, installer in `host/install/` shared with `npm run install-host`), the manifest names the binary directly and the native host mode is detected from the extension id Firefox passes, an upgrade renames a running binary aside (Windows), and a pushed `vX.Y.Z` tag matching `src/package.json` and the extension manifest publishes one binary per target (linux-x64, linux-arm64, macos-arm64, macos-x64, windows-x64), `SHA256SUMS` and the unsigned extension package on GitHub Releases; binaries are not code-signed for now; end-user guide in [`docs/install.md`](docs/install.md); see [Packaging](docs/decisions.md#packaging).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
-- AMO signing: the extension id `claude-sidebar@artem.dev` is signed unlisted on AMO with `web-ext sign` run locally only (API keys in the untracked `src/.env`, never on GitHub or in CI); no automatic updates (no `update_url`) for now; the release workflow keeps shipping the unsigned package for now; see [AMO signing](docs/decisions.md#amo-signing).
+- AMO signing: the extension id `claude-sidebar@artem.dev` is signed unlisted on AMO with `web-ext sign` run locally only (API keys in the untracked `src/.env`, never on GitHub or in CI); `data_collection_permissions` requires `websiteContent`, `websiteActivity` and `browsingActivity` (Mozilla counts data sent to a native application as transmission, so `none` would be wrong; Firefox shows them at install); no automatic updates (no `update_url`) for now; the release workflow keeps shipping the unsigned package for now; see [AMO signing](docs/decisions.md#amo-signing).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
 
 ## Threat model
@@ -106,9 +106,11 @@ src/                   npm package root; every command is run from here
   scripts/bundle-guard.mjs  metafile inputs from an npm package; the build fails when the extension bundle includes zod
   scripts/build-time-modules.mjs  esbuild plugin: runs listed modules in Node at build time and inlines their exports as JSON (shared/anthropic-tools.ts in the extension build, so zod is not shipped)
   scripts/install-host.mjs  runs the built host's install/uninstall (dist/host/index.js) for the development build
+  scripts/sign.mjs     npm run sign: loads .env, checks the AMO keys, runs web-ext sign --channel=unlisted with the keys in its environment only
+  scripts/sign-lib.mjs  pure signing logic: required key check, missing key message, web-ext arguments
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions; --binary installs and runs the single executable
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
-  scripts/test/        install-host script, e2e safety, build-time module, bundle guard, binary build and release tests
+  scripts/test/        install-host script, e2e safety, build-time module, bundle guard, binary build, release and signing tests
   shared/              code used by both host and extension
     tsconfig.json      shared type check (no DOM, no Node), test/ included
     test/              tests of the Anthropic tool definitions
@@ -264,6 +266,7 @@ Run every command from `src/` (`cd src && npm run build`).
 - `npm run typecheck`: `tsc --noEmit` for the root project (build scripts, installer tests, Vitest config), `extension/`, `host/` and `shared/` (each with its tests).
 - `npm test`: run the Vitest suite once (no build, Firefox or network; temp dirs under `/tmp` only). `npm run test:watch` for watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).
+- `npm run sign`: sign `dist/extension` on addons.mozilla.org as unlisted with `web-ext sign` (build first); the AMO API key and secret come from `src/.env` (template `src/.env.example`) or the environment, the signed `.xpi` goes to `web-ext-artifacts/`; the first run reserves the extension id ([AMO signing](docs/decisions.md#amo-signing)).
 - `npm run start`: run the built extension in a temporary Firefox profile with `web-ext run` (build first).
 - `npm run install-host`: register the development build as the native messaging host for Firefox (build first; runs `node dist/host/index.js install`, which writes a wrapper) and print the `claude mcp add` command; paths per OS in [docs/decisions.md](docs/decisions.md#native-host-installation-paths). Snap and Flatpak Firefox are not supported.
 - `npm run uninstall-host`: remove the manifest, the wrapper and an installed binary (and the registry key on Windows); build first.
