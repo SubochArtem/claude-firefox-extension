@@ -174,9 +174,12 @@ describe('releaseNotes', () => {
 
   it('points to the separately attached signed package and keeps the unsigned one for temporary loading', () => {
     expect(notes).toContain('claude-sidebar-0.1.0-signed.xpi');
-    expect(notes).toMatch(/installs permanently/);
+    expect(notes).toContain(
+      'The Mozilla-signed `claude-sidebar-0.1.0-signed.xpi` is attached to this release separately and installs ' +
+        'permanently in release Firefox',
+    );
     expect(notes).toContain('claude-firefox-extension-0.1.0.xpi');
-    expect(notes).toMatch(/unsigned/);
+    expect(notes).toContain('`claude-firefox-extension-0.1.0.xpi` is unsigned: load it temporarily');
     expect(notes).toContain('Load Temporary Add-on');
     expect(notes).toContain('xpinstall.signatures.required');
     expect(notes).not.toContain('feature/amo-signing');
