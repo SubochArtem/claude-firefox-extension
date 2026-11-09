@@ -75,8 +75,8 @@ Claude Code ──MCP (stdio)──> native host ──native messaging──> F
 Бинарники не подписаны сертификатом разработчика.
 
 - Linux: `chmod +x claude-firefox-host-linux-*`.
-- macOS: `chmod +x claude-firefox-host-macos-*`, затем снимите карантин загрузки командой `xattr -d com.apple.quarantine claude-firefox-host-macos-*`. Или запустите файл один раз, дайте macOS его заблокировать, откройте System Settings > Privacy & Security, нажмите Open Anyway рядом с сообщением о файле и запустите снова.
-- Windows: при первом запуске SmartScreen может показать «Windows protected your PC»; нажмите More info, затем Run anyway. В PowerShell можно заранее снять отметку загрузки командой `Unblock-File .\claude-firefox-host-windows-x64.exe`.
+- macOS: `chmod +x claude-firefox-host-macos-*`, затем снимите карантин загрузки командой `xattr -d com.apple.quarantine claude-firefox-host-macos-*`. Или запустите файл один раз, дайте macOS его заблокировать, откройте «System Settings > Privacy & Security», нажмите «Open Anyway» рядом с сообщением о файле и запустите снова.
+- Windows: при первом запуске SmartScreen может показать «Windows protected your PC»; нажмите «More info», затем «Run anyway». В PowerShell можно заранее снять отметку загрузки командой `Unblock-File .\claude-firefox-host-windows-x64.exe`.
 
 ### 3. Установите нативный хост
 
@@ -113,12 +113,12 @@ Clicks and typing need Firefox started with WebDriver BiDi on port 9222. Close e
 
 ### 5. Загрузите расширение
 
-Скачайте `claude-sidebar-<version>-signed.xpi` из релиза. Он подписан Mozilla и устанавливается навсегда в обычном Firefox: откройте файл в Firefox (File > Open File или перетащите его в окно Firefox) или в `about:addons` выберите в меню шестерёнки Install Add-on From File, и подтвердите установку.
+Скачайте `claude-sidebar-<version>-signed.xpi` из релиза. Он подписан Mozilla и устанавливается навсегда в обычном Firefox: откройте файл в Firefox («File > Open File» или перетащите его в окно Firefox) или в `about:addons` выберите в меню шестерёнки «Install Add-on From File», и подтвердите установку.
 
 В релизе есть и неподписанный `claude-firefox-extension-<version>.xpi`:
 
-- Обычный Firefox: откройте `about:debugging`, This Firefox, Load Temporary Add-on и выберите `.xpi`. Расширение удаляется при закрытии Firefox, и его нужно загружать заново после каждого запуска.
-- Firefox Developer Edition или Nightly: установите `xpinstall.signatures.required` в `false` в `about:config`, затем в `about:addons` выберите в меню шестерёнки Install Add-on From File и укажите `.xpi`. Такая установка постоянная.
+- Обычный Firefox: откройте `about:debugging`, «This Firefox», «Load Temporary Add-on» и выберите `.xpi`. Расширение удаляется при закрытии Firefox, и его нужно загружать заново после каждого запуска.
+- Firefox Developer Edition или Nightly: установите `xpinstall.signatures.required` в `false` в `about:config`, затем в `about:addons` выберите в меню шестерёнки «Install Add-on From File» и укажите `.xpi`. Такая установка постоянная.
 
 ### 6. Запустите Firefox с удалённой отладкой
 
@@ -132,7 +132,7 @@ Clicks and typing need Firefox started with WebDriver BiDi on port 9222. Close e
 
 ### 7. Дайте доступ к сайтам
 
-Скриншотам и инструментам страниц нужен доступ расширения ко всем сайтам. В `about:addons` откройте Claude Sidebar, вкладку Permissions и включите «Access your data for all websites». Проверьте это и для временной установки из `about:debugging` и включите, если выключено.
+Скриншотам и инструментам страниц нужен доступ расширения ко всем сайтам. В `about:addons` откройте Claude Sidebar, вкладку «Permissions and data» и включите «Access your data for all websites». Проверьте это и для временной установки из `about:debugging` и включите, если выключено.
 
 Расширение всё равно спрашивает перед действием на каждом сайте: вопрос показывает Claude Code, или Firefox открывает небольшое окно запроса.
 
@@ -154,7 +154,7 @@ Clicks and typing need Firefox started with WebDriver BiDi on port 9222. Close e
 
 ## Боковая панель
 
-Откройте боковую панель «Claude» через View > Sidebar или кнопку боковой панели. Чат работает с активной вкладкой окна этой панели. Enter отправляет, Shift+Enter добавляет строку, Stop прерывает, New chat начинает заново. Закрытие панели завершает разговор. Бэкенд выбирается в настройках расширения (`about:addons`, Claude Sidebar, Options).
+Откройте боковую панель «Claude» через «View > Sidebar» или кнопку боковой панели. Чат работает с активной вкладкой окна этой панели. Enter отправляет, Shift+Enter добавляет строку, «Stop» прерывает, «New chat» начинает заново. Закрытие панели завершает разговор. Бэкенд выбирается в настройках расширения (`about:addons`, Claude Sidebar, «Options»).
 
 ### С ключом Anthropic API
 
@@ -174,7 +174,7 @@ Clicks and typing need Firefox started with WebDriver BiDi on port 9222. Close e
 
 ## Безопасность и разрешения
 
-- **Разрешения сайтов.** Каждое действие на сайте (переход, чтение, клик, ввод, выполнение JavaScript, чтение консоли или сети) требует разрешения этого сайта. Вы отвечаете «разрешить» или «запретить», один раз или всегда, при желании для всех поддоменов, в Claude Code или в окне запроса Firefox; отсутствие ответа примерно за 120 секунд считается запретом. Сохранённый запрет всегда главнее. Работать можно только со страницами `http` и `https`. Сохранённые разрешения показаны на странице настроек, у каждого есть кнопка Revoke.
+- **Разрешения сайтов.** Каждое действие на сайте (переход, чтение, клик, ввод, выполнение JavaScript, чтение консоли или сети) требует разрешения этого сайта. Вы отвечаете «разрешить» или «запретить», один раз или всегда, при желании для всех поддоменов, в Claude Code или в окне запроса Firefox; отсутствие ответа примерно за 120 секунд считается запретом. Сохранённый запрет всегда главнее. Работать можно только со страницами `http` и `https`. Сохранённые разрешения показаны на странице настроек, у каждого есть кнопка «Revoke».
 - **Контейнер Claude.** Вкладки, которые открывает агент, по умолчанию попадают в отдельный контейнер «Claude» со своими cookies и входами, поэтому агент не авторизован в ваших аккаунтах. На странице настроек это можно переключить на обычный профиль. Агент всё равно может переходить по адресам и закрывать любую вкладку, включая ваши, с проверкой разрешения сайта, описанной выше.
 - **Содержимое страниц не доверенное.** Веб-страницы могут содержать текст, написанный, чтобы ввести агента в заблуждение (prompt injection). Разрешения сайтов ограничивают то, до чего может дотянуться обманутый агент; давайте «всегда» только сайтам, которым доверяете.
 - **Порт удалённой отладки.** С `--remote-debugging-port` точка WebDriver BiDi на `127.0.0.1` не требует аутентификации: любой локальный процесс, включая процессы других пользователей того же компьютера, может управлять браузером, пока не открыта другая сессия. Firefox показывает значок робота и полосатую адресную строку и сообщает каждой странице `navigator.webdriver = true`, так что сайты могут распознать автоматизацию. Запускайте Firefox так, только когда нужны действия ввода.

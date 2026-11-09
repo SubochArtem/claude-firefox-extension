@@ -132,7 +132,7 @@ Firefox then shows a robot icon and a striped address bar. To use another port, 
 
 ### 7. Grant access to websites
 
-Screenshots and page tools need the extension's access to all websites. In `about:addons`, open Claude Sidebar, go to the Permissions tab and turn on "Access your data for all websites". Check this for a temporary install from `about:debugging` too and turn it on if it is off.
+Screenshots and page tools need the extension's access to all websites. In `about:addons`, open Claude Sidebar, go to the "Permissions and data" tab and turn on "Access your data for all websites". Check this for a temporary install from `about:debugging` too and turn it on if it is off.
 
 The extension still asks before acting on each site: Claude Code shows the question, or Firefox opens a small prompt window.
 
