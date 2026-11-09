@@ -8,3 +8,4 @@ web-ext-artifacts/
 .claude/
 .mcp.json
 CLAUDE.local.md
+.env

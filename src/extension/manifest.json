@@ -34,7 +34,7 @@
   },
   "browser_specific_settings": {
     "gecko": {
-      "id": "claude-firefox-extension@localhost",
+      "id": "claude-sidebar@artem.dev",
       "strict_min_version": "158.0",
       "data_collection_permissions": {
         "required": ["none"]

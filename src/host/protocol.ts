@@ -1,6 +1,6 @@
 export const NATIVE_HOST_NAME = 'claude_firefox_extension';
 // Must match the gecko id in extension/manifest.json; Firefox passes it to the native host as an argument.
-export const EXTENSION_ID = 'claude-firefox-extension@localhost';
+export const EXTENSION_ID = 'claude-sidebar@artem.dev';
 // Must match PROMPT_TIMEOUT_MS in extension/permissions/popup-prompt.ts.
 export const PERMISSION_PROMPT_TIMEOUT_MS = 120_000;
 // Environment variable that carries a sidebar chat session's token to the MCP server Claude Code
