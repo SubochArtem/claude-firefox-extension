@@ -150,7 +150,7 @@ describe('releaseNotes', () => {
   const notes = releaseNotes('0.1.0', 'owner/repo');
 
   it('links the install guide of the tagged version and the checksum file', () => {
-    expect(notes).toContain('https://github.com/owner/repo/blob/v0.1.0/docs/install.md');
+    expect(notes).toContain('https://github.com/owner/repo/blob/v0.1.0/README.md#installation');
     expect(notes).toContain('SHA256SUMS');
   });
 

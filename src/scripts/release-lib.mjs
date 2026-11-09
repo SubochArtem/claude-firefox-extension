@@ -101,7 +101,7 @@ export function releaseNotes(version, repository) {
   }
   const extension = extensionAssetName(version);
   return [
-    `Install guide: https://github.com/${repository}/blob/v${version}/docs/install.md`,
+    `Install guide: https://github.com/${repository}/blob/v${version}/README.md#installation`,
     '',
     '## Native host',
     '',
