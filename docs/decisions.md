@@ -265,6 +265,7 @@ End users install the native host without Node.js (`feature/packaging`).
 
 - Extension id: `claude-sidebar@artem.dev`, reserved on addons.mozilla.org once `feature/amo-signing` signs it. It replaced `claude-firefox-extension@localhost`; the native messaging manifest allows only one id, so an existing install must run the host `install` again after upgrading, and must set its site permissions, sidebar chat settings and agent tabs setting again, since the new id gets a new `storage.local`.
 - Signing: unlisted, with `web-ext sign` run locally only. The AMO API key and secret live in the untracked `src/.env` (`WEB_EXT_API_KEY`, `WEB_EXT_API_SECRET`; template in `src/.env.example`) and never go to GitHub or CI.
+- Signing command: `npm run sign` (build first, like lint) runs `scripts/sign.mjs`, which loads `src/.env` with `process.loadEnvFile` (variables already set in the environment win), fails before calling web-ext when `WEB_EXT_API_KEY` or `WEB_EXT_API_SECRET` is missing or empty, then runs `web-ext sign --channel=unlisted` on `dist/extension` with the defaults of `web-ext-config.mjs`; the signed `.xpi` lands in `web-ext-artifacts/`. The keys reach web-ext only through its environment, never on the command line, where other processes could read them. The first run uploads a new add-on and reserves the id permanently. The pure parts (key check, arguments) are in `scripts/sign-lib.mjs`.
 - Updates: no automatic updates (no `update_url`) for now. The release workflow keeps shipping the unsigned package for now.
 
 ## Native host installation paths

@@ -106,9 +106,11 @@ src/                   npm package root; every command is run from here
   scripts/bundle-guard.mjs  metafile inputs from an npm package; the build fails when the extension bundle includes zod
   scripts/build-time-modules.mjs  esbuild plugin: runs listed modules in Node at build time and inlines their exports as JSON (shared/anthropic-tools.ts in the extension build, so zod is not shipped)
   scripts/install-host.mjs  runs the built host's install/uninstall (dist/host/index.js) for the development build
+  scripts/sign.mjs     npm run sign: loads .env, checks the AMO keys, runs web-ext sign --channel=unlisted with the keys in its environment only
+  scripts/sign-lib.mjs  pure signing logic: required key check, missing key message, web-ext arguments
   scripts/e2e.mjs      end-to-end check in a real headless Firefox (npm run e2e), loads a copy of the extension with seeded site permissions; --binary installs and runs the single executable
   scripts/e2e-safety.mjs  checks that confine a local e2e run to a temporary HOME (pure, tested)
-  scripts/test/        install-host script, e2e safety, build-time module, bundle guard, binary build and release tests
+  scripts/test/        install-host script, e2e safety, build-time module, bundle guard, binary build, release and signing tests
   shared/              code used by both host and extension
     tsconfig.json      shared type check (no DOM, no Node), test/ included
     test/              tests of the Anthropic tool definitions
@@ -264,6 +266,7 @@ Run every command from `src/` (`cd src && npm run build`).
 - `npm run typecheck`: `tsc --noEmit` for the root project (build scripts, installer tests, Vitest config), `extension/`, `host/` and `shared/` (each with its tests).
 - `npm test`: run the Vitest suite once (no build, Firefox or network; temp dirs under `/tmp` only). `npm run test:watch` for watch mode.
 - `npm run lint`: run `web-ext lint` on `dist/extension` (build first).
+- `npm run sign`: sign `dist/extension` on addons.mozilla.org as unlisted with `web-ext sign` (build first); the AMO API key and secret come from `src/.env` (template `src/.env.example`) or the environment, the signed `.xpi` goes to `web-ext-artifacts/`; the first run reserves the extension id ([AMO signing](docs/decisions.md#amo-signing)).
 - `npm run start`: run the built extension in a temporary Firefox profile with `web-ext run` (build first).
 - `npm run install-host`: register the development build as the native messaging host for Firefox (build first; runs `node dist/host/index.js install`, which writes a wrapper) and print the `claude mcp add` command; paths per OS in [docs/decisions.md](docs/decisions.md#native-host-installation-paths). Snap and Flatpak Firefox are not supported.
 - `npm run uninstall-host`: remove the manifest, the wrapper and an installed binary (and the registry key on Windows); build first.
