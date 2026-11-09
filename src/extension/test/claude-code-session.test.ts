@@ -310,6 +310,15 @@ describe('Claude Code events in the view', () => {
     expect(view().filter((item) => item.kind === 'assistant')).toEqual([{ kind: 'assistant', text: 'Hi' }]);
   });
 
+  it('does not repeat streamed text when only the full message has an id', async () => {
+    const { started, event, view } = setup();
+    await started();
+    event({ type: 'stream_event', event: { type: 'message_start', message: {} } });
+    event(delta('Hi'));
+    event(assistant('msg_1', { type: 'text', text: 'Hi' }));
+    expect(view().filter((item) => item.kind === 'assistant')).toEqual([{ kind: 'assistant', text: 'Hi' }]);
+  });
+
   it('shows the text of a full message that was not streamed', async () => {
     const { started, event, view } = setup();
     await started();

@@ -163,7 +163,8 @@ async function renderSetup(generation: number): Promise<void> {
   if (generation !== setupGeneration) return;
   switchBackend(settings.backend);
   if (settings.backend === 'claude-code') {
-    showSetup(CHECKING_CLAUDE_CODE);
+    // A recheck during a turn keeps the prompt and the controls as they are.
+    if (!claudeCodeSession.running) showSetup(CHECKING_CLAUDE_CODE);
     const state = await claudeCodeSetup();
     if (generation === setupGeneration) showSetup(state);
     return;

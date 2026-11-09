@@ -16,13 +16,10 @@ const ERROR_HINTS: Record<string, string> = {
   host_disconnected: 'Check that the native host is installed, then try again.',
 };
 
-/** The parts of runtime.Port the session uses. */
 export type ChatPort = Pick<browser.runtime.Port, 'postMessage' | 'disconnect' | 'onMessage' | 'onDisconnect'>;
 
 export interface ClaudeCodeSessionOptions {
-  /** Opens a port to the background's Claude Code relay. */
   connect: () => ChatPort;
-  /** The sidebar's window, whose active tab the session starts on. */
   windowId: () => Promise<number | undefined>;
   model: () => Promise<string | undefined>;
   onChange: (change: ChatChange) => void;
@@ -104,7 +101,6 @@ export class ClaudeCodeSession {
     return this.turnRunning;
   }
 
-  /** False when nothing was sent (blank text or a turn in progress). */
   send(input: string): boolean {
     const text = input.trim();
     if (text === '' || this.turnRunning) return false;
@@ -121,7 +117,6 @@ export class ClaudeCodeSession {
     return true;
   }
 
-  /** Interrupts the running turn; it ends when claude reports its result. */
   stop(): void {
     if (!this.turnRunning) return;
     if (this.sessionId === undefined) {
@@ -133,7 +128,6 @@ export class ClaudeCodeSession {
     this.post({ type: 'chat_interrupt', sessionId: this.sessionId });
   }
 
-  /** Closes the session and clears the conversation; the next prompt starts a new session. */
   newChat(): void {
     this.epoch += 1;
     if (this.sessionId !== undefined && this.connection !== undefined) this.post({ type: 'chat_close', sessionId: this.sessionId });
@@ -313,7 +307,7 @@ export class ClaudeCodeSession {
 
   // With partial messages the text already arrived as deltas; the full message only adds what was not streamed.
   private handleAssistant(message: Record<string, unknown>): void {
-    const streamed = typeof message.id === 'string' ? this.streamedMessages.has(message.id) : this.streamedWithoutId;
+    const streamed = this.streamedWithoutId || (typeof message.id === 'string' && this.streamedMessages.has(message.id));
     for (const block of records(message.content)) {
       if (block.type === 'text' && typeof block.text === 'string') {
         if (streamed || block.text.trim() === '') continue;
