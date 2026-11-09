@@ -114,8 +114,10 @@ export function releaseNotes(version, repository) {
     '',
     '## Extension',
     '',
-    `\`${extension}\` is not signed by Mozilla yet, so release Firefox cannot install it permanently ` +
-      'until it is signed on addons.mozilla.org (`feature/amo-signing`). Until then either load it temporarily (about:debugging, This Firefox, ' +
+    `The Mozilla-signed \`claude-sidebar-${version}-signed.xpi\` is attached to this release separately and installs ` +
+      'permanently in release Firefox: open the file in Firefox, or use the gear menu > Install Add-on From File in about:addons.',
+    '',
+    `\`${extension}\` is unsigned: load it temporarily (about:debugging, This Firefox, ` +
       'Load Temporary Add-on; it is removed when Firefox closes), or use Firefox Developer Edition or Nightly with ' +
       '`xpinstall.signatures.required` set to `false` in about:config and install it from the file in about:addons.',
     '',

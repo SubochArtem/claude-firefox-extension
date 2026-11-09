@@ -172,12 +172,14 @@ describe('releaseNotes', () => {
     for (const target of TARGETS) expect(notes).toContain(binaryAssetName(target.id));
   });
 
-  it('says the extension package is unsigned and how to load it until signing lands', () => {
+  it('points to the separately attached signed package and keeps the unsigned one for temporary loading', () => {
+    expect(notes).toContain('claude-sidebar-0.1.0-signed.xpi');
+    expect(notes).toMatch(/installs permanently/);
     expect(notes).toContain('claude-firefox-extension-0.1.0.xpi');
-    expect(notes).toMatch(/not signed/);
-    expect(notes).toContain('feature/amo-signing');
+    expect(notes).toMatch(/unsigned/);
     expect(notes).toContain('Load Temporary Add-on');
     expect(notes).toContain('xpinstall.signatures.required');
+    expect(notes).not.toContain('feature/amo-signing');
   });
 
   it('says the binaries are not code-signed', () => {

@@ -13,9 +13,10 @@ Open the latest release on the repository's Releases page and download the nativ
 | macOS Apple silicon | `claude-firefox-host-macos-arm64` |
 | macOS Intel | `claude-firefox-host-macos-x64` |
 | Windows x64 | `claude-firefox-host-windows-x64.exe` |
-| Extension (all systems) | `claude-firefox-extension-<version>.xpi` |
+| Extension, signed (all systems) | `claude-sidebar-<version>-signed.xpi` |
+| Extension, unsigned (all systems) | `claude-firefox-extension-<version>.xpi` |
 
-Optionally check the downloads against `SHA256SUMS` from the same release (`sha256sum -c SHA256SUMS --ignore-missing` on Linux, `shasum -a 256 -c SHA256SUMS --ignore-missing` on macOS, on Windows in PowerShell `(Get-FileHash <file>).Hash.ToLower()`, which must equal the hash on the file's line in `SHA256SUMS`).
+Optionally check the downloads against `SHA256SUMS` from the same release (`sha256sum -c SHA256SUMS --ignore-missing` on Linux, `shasum -a 256 -c SHA256SUMS --ignore-missing` on macOS, on Windows in PowerShell `(Get-FileHash <file>).Hash.ToLower()`, which must equal the hash on the file's line in `SHA256SUMS`). The signed extension is attached after the release is built and is not listed in `SHA256SUMS`; Firefox checks Mozilla's signature itself.
 
 ## 2. Allow the binary to run
 
@@ -62,7 +63,9 @@ Run the `claude mcp add firefox -- ...` command exactly as `install` printed it 
 
 The extension appears in Firefox as "Claude Sidebar".
 
-The extension package is not signed by Mozilla yet, so release Firefox cannot install it permanently until the extension is signed on addons.mozilla.org (`feature/amo-signing`). Until then:
+Download `claude-sidebar-<version>-signed.xpi` from the release. It is signed by Mozilla and installs permanently in release Firefox: open the file in Firefox (File > Open File, or drag it into a Firefox window), or in `about:addons` use the gear menu > Install Add-on From File, and confirm the install.
+
+The release also has the unsigned `claude-firefox-extension-<version>.xpi`:
 
 - Release Firefox: open `about:debugging`, This Firefox, Load Temporary Add-on, and pick the `.xpi`. The extension is removed when Firefox closes and has to be loaded again after every start.
 - Firefox Developer Edition or Nightly: set `xpinstall.signatures.required` to `false` in `about:config`, then in `about:addons` use the gear menu > Install Add-on From File and pick the `.xpi`. This install is permanent.
