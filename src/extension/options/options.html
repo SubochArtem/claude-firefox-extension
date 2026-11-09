@@ -77,17 +77,21 @@
     </section>
     <section>
       <h2>Sidebar chat</h2>
+      <label><input type="radio" name="chatBackend" value="api" /> Anthropic API key</label>
+      <p class="hint">The sidebar calls the Anthropic API with your API key, billed to your API account.</p>
+      <label><input type="radio" name="chatBackend" value="claude-code" /> Local Claude Code</label>
+      <p class="hint">The sidebar runs your installed Claude Code through the native host, with your Claude subscription login.</p>
+      <label for="chat-model">Model</label>
+      <select id="chat-model"></select>
+      <p id="claude-code-status">Claude Code: checking...</p>
       <label for="api-key">Anthropic API key</label>
       <input id="api-key" type="password" autocomplete="off" spellcheck="false" size="40" />
       <button id="api-key-save" type="button">Save</button>
       <button id="api-key-clear" type="button">Clear</button>
       <p id="api-key-status"></p>
       <p class="note">The key is stored unencrypted in this Firefox profile's local extension storage and is sent only to api.anthropic.com.</p>
-      <label for="chat-model">Model</label>
-      <select id="chat-model"></select>
       <p id="api-access-status"></p>
       <button id="api-access-grant" type="button" hidden>Grant access</button>
-      <p id="claude-code-status">Claude Code: checking...</p>
     </section>
     <p id="status"></p>
     <script src="options.js"></script>

@@ -74,7 +74,7 @@ Each feature is delivered as a series of small pull requests, one coherent part 
 - [x] `feature/bidi-input`: `computer` tool (click, type, key, scroll) through WebDriver BiDi; `form_input`.
 - [x] `feature/devtools-tools`: `javascript_tool`, `read_console_messages`, `read_network_requests`, `resize_window`.
 - [x] `feature/sidebar-chat`: chat in a Firefox sidebar; options decided at its start after checking Anthropic's terms: a sidebar that talks to the user's local Claude Code through the native host (user signs in to Claude Code as usual), or direct Anthropic API calls with the user's API key. Signing in to claude.ai from the extension like Claude in Chrome is not available to third parties.
-- [ ] `feature/sidebar-claude-code`: the sidebar talks to the user's local Claude Code through the native host; next feature after packaging.
+- [x] `feature/sidebar-claude-code`: the sidebar talks to the user's local Claude Code through the native host.
 - [ ] `feature/multi-provider-fork`: a separate extension forked from this one, where the user enters an API URL and API key to work with different AI providers; designed at its start.
 - [x] `feature/packaging`: installation without Node.js for end users: a native host executable and an installer per OS.
 
@@ -114,9 +114,9 @@ src/                   npm package root; every command is run from here
     anthropic-tools.ts  ANTHROPIC_TOOLS: the tool definitions as Anthropic tool objects with JSON Schema (z.toJSONSchema, same as the MCP tools/list)
   extension/           Firefox extension sources: manifest.json, background script, content scripts, static assets
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
-    test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks, happy-dom tests for page/
+    test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks, happy-dom tests for page/ and the options page
     settings.ts        extension settings in storage.local (agent tabs: Claude container or normal profile), validated loader
-    chat-settings.ts   sidebar chat settings in storage.local (API key, model from CHAT_MODELS, backend api or claude-code, not yet in the UI), validated loader and saver, Anthropic API host permission pattern
+    chat-settings.ts   sidebar chat settings in storage.local (API key, model from CHAT_MODELS, backend api or claude-code), validated loader and saver, Anthropic API host permission pattern
     chat/              sidebar chat model access (no browser.* calls)
       provider.ts      ChatProvider interface: one streamed turn; Anthropic-shaped message, content block, usage and result types
       anthropic-provider.ts  Anthropic Messages API over fetch: streamed request with cache_control on the last tool and system block, SSE event assembly into text and tool_use blocks, HTTP and stream errors, idle watchdog, abort
@@ -125,15 +125,16 @@ src/                   npm package root; every command is run from here
       agent-loop.ts    agent loop: turns while tool_use, tool calls in order, 50 turn cap, retries of retryable API errors with backoff, old screenshots trimmed from requests, cancellation with "cancelled by user" results
       system-prompt.ts  system blocks: guidance (tools, untrusted page content, site permissions), date, model, platform and shortcut modifier, bound tab; the Claude Code append prompt (no model, clipped tab URL and title, within the host limit)
       claude-code-relay.ts  Claude Code sessions between sidebar ports and the native host: sidebar sender check, session ids made in the background, events only to the owning port, close on sidebar disconnect, synthetic error and close on native port loss, chat_status with a timeout
-    options/           options page (about:addons): agent tabs switch, sidebar chat API key, model and api.anthropic.com access, read-only Claude Code status, stored site permissions with Revoke
+    options/           options page (about:addons): agent tabs switch, sidebar chat backend (API key or local Claude Code), API key, model and api.anthropic.com access, read-only Claude Code status, stored site permissions with Revoke
       options.html, options.ts  the page: renders with textContent, live refresh on storage changes
       options-view.ts  pure rows for the permission list, saved API key status (last 4 characters only), Claude Code status line
       options-messages.ts  background handlers for revoke and Claude Code status requests from the options page
     sidebar/           sidebar chat
       markdown.ts      Markdown renderer for chat messages built with createElement/textContent only: paragraphs, headings, emphasis, code spans and fences (unclosed fence renders as code), lists with one nested level, blockquotes, rules, http(s)/mailto links and bare URLs, anything else as literal text
-      sidebar.html, sidebar.css, sidebar.ts  the sidebar chat page (sidebar_action): DOM binding of the session, setup panel (Open options, Grant access), message list, Enter to send, Stop, New chat; follows the light/dark theme
+      sidebar.html, sidebar.css, sidebar.ts  the sidebar chat page (sidebar_action): DOM binding of the session of the chosen backend (closed on a backend switch), setup panel (Open options, Grant access, Check again for Claude Code), message list, Enter to send, Stop, New chat; follows the light/dark theme
       chat-session.ts  conversation state without browser.* calls: history (a prompt after a trailing user message joins it), running state, agent loop events to view items (streamed text, tool lines with clipped input and results, retry and error notes)
-      setup-state.ts   setup state from the saved key and the api.anthropic.com grant: needs key, needs access, ready
+      claude-code-session.ts  Claude Code conversation without browser.* calls: relay port opened on demand, session started lazily on the first prompt (queued until chat_started), Stop as chat_interrupt, New chat as chat_close, port loss ends the session with a note; stream-json events to view items (streamed text without repeating the full message, tool lines without the mcp__firefox__ prefix and their results, result, reduced and chat_error notes); chat_status
+      setup-state.ts   setup state from the saved key and the api.anthropic.com grant (needs key, needs access, ready), or for Claude Code from chat_status (host not connected, not found, too old, not logged in, ready)
       sidebar-messages.ts  background handler for the sidebar's tool calls: sender check (sidebar page only), tool registry with the popup prompt and the native port's BiDi channels, results as text and image blocks
       sidebar-constants.ts  sidebar page path, the tool call message type and the Claude Code port name, shared by the sidebar page and the background without pulling in the tools
     page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
@@ -267,4 +268,4 @@ Run every command from `src/` (`cd src && npm run build`).
 - `dist/bin/claude-firefox-host install` (or a downloaded binary): copy the binary into the per-user install directory, register it with Firefox and print `claude mcp add firefox -- '<installed binary>' --mcp`; run it again to upgrade. `claude-firefox-host uninstall` removes it all.
 - `npm run e2e`: end-to-end check in a real headless Firefox (build first); changes the host registration, so it runs only with `CI=true|1` or `--force`, and a local `--force` run is Linux only inside a temporary `HOME` and `XDG_RUNTIME_DIR` under `/tmp` ([E2E](docs/decisions.md#e2e)). `E2E_FIREFOX` overrides the Firefox binary. `--binary` installs and runs the single executable instead (`npm run build:binary` first; CI runs it this way). Example: `RT=$(mktemp -d /tmp/cfe-rt-XXXX); H=$(mktemp -d /tmp/cfe-home-XXXX); HOME=$H XDG_RUNTIME_DIR=$RT npm run e2e -- --force --binary`.
 - `claude mcp add firefox -- '<node>' '<abs path>/src/dist/host/index.js' --mcp` (double quotes on Windows): register the MCP server with Claude Code, once, using the exact command printed by `npm run install-host` (or by the binary's `install`).
-- Using the sidebar chat: open the extension's options page in `about:addons`, save an Anthropic API key (and pick a model), click "Grant access" for api.anthropic.com (the sidebar offers the same button), then open the "Claude" sidebar (View > Sidebar, or the sidebar button). The chat acts on the active tab of the sidebar's window; site permissions are asked in a popup.
+- Using the sidebar chat: open the extension's options page in `about:addons`, save an Anthropic API key (and pick a model), click "Grant access" for api.anthropic.com (the sidebar offers the same button), then open the "Claude" sidebar (View > Sidebar, or the sidebar button). The chat acts on the active tab of the sidebar's window; site permissions are asked in a popup. To use local Claude Code instead of an API key, install and log in to `claude` (`claude auth login`, a Claude subscription), choose "Local Claude Code" in the options page and open the sidebar; no API key or api.anthropic.com access is needed ([`docs/install.md`](docs/install.md#using-the-sidebar-with-local-claude-code)).
