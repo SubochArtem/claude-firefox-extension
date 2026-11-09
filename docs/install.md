@@ -95,7 +95,7 @@ Site permissions are always asked in a small Firefox prompt window in this mode,
 
 Download the new binary and run its `install` as in steps 2 and 3. It replaces the installed copy, even while Firefox or Claude Code still run the old one; restart Firefox and Claude Code to use the new version. The `claude mcp add` registration stays valid. Load the new extension package as in step 5.
 
-The extension id changed to `claude-sidebar@artem.dev`. If your install predates that change, run `install` again after upgrading: the registered manifest allows only the old id.
+The extension id changed to `claude-sidebar@artem.dev`. If your install predates that change, run `install` again after upgrading: the registered manifest allows only the old id. The new id also gets a new storage area, so stored site permissions, the sidebar chat API key, model and backend, and the agent tabs setting are not carried over: set them again in the options page.
 
 ## Uninstalling
 

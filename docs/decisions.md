@@ -263,7 +263,7 @@ End users install the native host without Node.js (`feature/packaging`).
 
 ## AMO signing
 
-- Extension id: `claude-sidebar@artem.dev`, reserved on addons.mozilla.org once `feature/amo-signing` signs it. It replaced `claude-firefox-extension@localhost`; the native messaging manifest allows only one id, so an existing install must run the host `install` again after upgrading.
+- Extension id: `claude-sidebar@artem.dev`, reserved on addons.mozilla.org once `feature/amo-signing` signs it. It replaced `claude-firefox-extension@localhost`; the native messaging manifest allows only one id, so an existing install must run the host `install` again after upgrading, and must set its site permissions, sidebar chat settings and agent tabs setting again, since the new id gets a new `storage.local`.
 - Signing: unlisted, with `web-ext sign` run locally only. The AMO API key and secret live in the untracked `src/.env` (`WEB_EXT_API_KEY`, `WEB_EXT_API_SECRET`; template in `src/.env.example`) and never go to GitHub or CI.
 - Updates: no automatic updates (no `update_url`) for now. The release workflow keeps shipping the unsigned package for now.
 
