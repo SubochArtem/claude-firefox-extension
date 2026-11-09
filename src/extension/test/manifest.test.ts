@@ -48,4 +48,10 @@ describe('manifest', () => {
   it('declares the Anthropic API as an optional host permission for the sidebar chat', () => {
     expect(manifest.optional_host_permissions).toEqual(['https://api.anthropic.com/*']);
   });
+
+  it('declares the data that leaves the browser through the native host or the Anthropic API as required data collection', () => {
+    expect(manifest.browser_specific_settings.gecko.data_collection_permissions).toEqual({
+      required: ['websiteContent', 'websiteActivity', 'browsingActivity'],
+    });
+  });
 });
