@@ -24,7 +24,7 @@ import { checkBridgeSocketDir } from './socket-path';
 
 const LOG = '[mcp-server]';
 const NOT_CONNECTED_MESSAGE =
-  'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
+  'Firefox is not running or the Claude Sidebar extension is not connected. Open Firefox with the extension enabled and try again.';
 
 class AuthenticationError extends Error {
   constructor(reason: string) {

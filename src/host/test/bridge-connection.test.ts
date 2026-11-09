@@ -4,7 +4,7 @@ import { BridgeConnection } from '../mcp-server';
 import { RUNTIME_DIR_VAR, startFakeHost, tempDir, textResult, waitFor, type FakeHost } from './helpers';
 
 const NOT_CONNECTED =
-  'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
+  'Firefox is not running or the Claude Sidebar extension is not connected. Open Firefox with the extension enabled and try again.';
 const NOT_CONNECTED_RESULT = { content: [{ type: 'text', text: NOT_CONNECTED }], isError: true };
 const ANSWER = { content: [{ type: 'text', text: 'answer' }] };
 

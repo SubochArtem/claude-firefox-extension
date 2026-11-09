@@ -16,7 +16,7 @@ export interface SiteAccessRequest {
 }
 
 export function blockedMessage(host: string): string {
-  return `Access to ${host} is blocked by the user's site settings in the Claude Firefox Extension. Do not try to reach this site another way; ask the user if it is needed.`;
+  return `Access to ${host} is blocked by the user's site settings in the Claude Sidebar extension. Do not try to reach this site another way; ask the user if it is needed.`;
 }
 
 export function deniedMessage(host: string): string {

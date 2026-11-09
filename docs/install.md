@@ -60,6 +60,8 @@ Run the `claude mcp add firefox -- ...` command exactly as `install` printed it 
 
 ## 5. Load the extension
 
+The extension appears in Firefox as "Claude Sidebar".
+
 The extension package is not signed by Mozilla yet, so release Firefox cannot install it permanently until the extension is signed on addons.mozilla.org (`feature/amo-signing`). Until then:
 
 - Release Firefox: open `about:debugging`, This Firefox, Load Temporary Add-on, and pick the `.xpi`. The extension is removed when Firefox closes and has to be loaded again after every start.
@@ -77,7 +79,7 @@ Firefox then shows a robot icon and a striped address bar. To use another port, 
 
 ## 7. Grant access to websites
 
-Screenshots and page tools need the extension's access to all websites. In `about:addons`, open the extension, go to the Permissions tab and turn on "Access your data for all websites". Check this for a temporary install from `about:debugging` too and turn it on if it is off.
+Screenshots and page tools need the extension's access to all websites. In `about:addons`, open Claude Sidebar, go to the Permissions tab and turn on "Access your data for all websites". Check this for a temporary install from `about:debugging` too and turn it on if it is off.
 
 The extension still asks before acting on each site: Claude Code shows the question, or Firefox opens a small prompt window.
 
@@ -86,7 +88,7 @@ The extension still asks before acting on each site: Claude Code shows the quest
 The "Claude" sidebar (View > Sidebar) can run your installed Claude Code instead of calling the Anthropic API with an API key:
 
 1. Install Claude Code 2.1.302 or newer and log in with your Claude account: run `claude` in a terminal and log in, or run `claude auth login`. Only a Claude subscription login is used; an API key or a cloud provider login is not.
-2. In `about:addons`, open the extension's options and choose "Local Claude Code" under "Sidebar chat". The model chosen there applies to this mode too. The status line below shows whether Claude Code was found and is logged in.
+2. In `about:addons`, open the options of Claude Sidebar and choose "Local Claude Code" under "Sidebar chat". The model chosen there applies to this mode too. The status line below shows whether Claude Code was found and is logged in.
 3. Open the sidebar and type a prompt. The native host starts Claude Code for the conversation; "New chat" ends it. If Claude Code is not found, set `CLAUDE_FIREFOX_CLAUDE_PATH` to its full path in the environment Firefox is started from.
 
 Site permissions are always asked in a small Firefox prompt window in this mode, not in Claude Code.
@@ -105,4 +107,4 @@ Close Firefox and Claude Code, then run `uninstall` with the installed or a down
 ~/.local/share/claude-firefox-extension/claude-firefox-host uninstall
 ```
 
-It removes the Firefox registration and the installed files. Then remove the MCP server with `claude mcp remove firefox` and the extension in `about:addons`.
+It removes the Firefox registration and the installed files. Then remove the MCP server with `claude mcp remove firefox` and the Claude Sidebar extension in `about:addons`.
