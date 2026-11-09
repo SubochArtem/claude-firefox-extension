@@ -1,7 +1,7 @@
 import { vi } from 'vitest';
 import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 
-export const EXTENSION_ID = 'claude-firefox-extension@localhost';
+export const EXTENSION_ID = 'claude-sidebar@artem.dev';
 export const EXTENSION_ORIGIN = 'moz-extension://00000000-0000-4000-8000-000000000000';
 
 export interface FakePort {

@@ -46,7 +46,7 @@ beforeEach(async () => {
       onStartup: onStartup.event,
       onMessage: onMessage.event,
       onConnect: onConnect.event,
-      id: 'claude-firefox-extension@localhost',
+      id: 'claude-sidebar@artem.dev',
       getURL: (path: string) => `moz-extension://test/${path}`,
       getManifest: () => ({ version: '0' }),
     },

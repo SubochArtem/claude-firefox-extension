@@ -24,7 +24,7 @@ import { isolatedXdgEnv, localRunSafety, pathsOutside } from './e2e-safety.mjs';
 const APP_NAME = 'claude-firefox-extension';
 const NATIVE_HOST_NAME = 'claude_firefox_extension';
 // Must match EXTENSION_ID in host/protocol.ts: Firefox passes it to a native host it starts.
-const EXTENSION_ID = 'claude-firefox-extension@localhost';
+const EXTENSION_ID = 'claude-sidebar@artem.dev';
 const NOT_CONNECTED =
   'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
 const BRIDGE_TIMEOUT_MS = 90_000;

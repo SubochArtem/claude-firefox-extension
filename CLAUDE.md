@@ -29,7 +29,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Native host and MCP server: Node.js + TypeScript, official `@modelcontextprotocol/sdk`.
 - Target: current Firefox release (158), Manifest V3.
 - All project code and tooling live under `src/`: `src/package.json` is the npm root (`src/extension`, `src/host`); build output goes to `src/dist/`.
-- Extension id: `claude-firefox-extension@localhost`; the native messaging manifest's `allowed_extensions` must match it.
+- Extension id: `claude-sidebar@artem.dev`; the native messaging manifest's `allowed_extensions` must match it.
 - Permissions and host permissions are added in the feature that first needs them, not up front.
 - Firefox MV3 host permissions are opt-in: a feature that needs them must document granting them in `about:addons` or request them at runtime.
 - Bridge: the native host listens on a private Unix socket (Linux, macOS) or a random named pipe (Windows), publishes `bridge.json` with a per-start secret, runs a mutual HMAC handshake with every MCP server process, then multiplexes newline-delimited JSON by rewriting ids to `<clientId>:<id>`; see [Bridge protocol](docs/decisions.md#bridge-protocol) for endpoints, `bridge.json`, the Windows second-host check, limits and startup buffering/backoff.
@@ -44,6 +44,7 @@ Details: [`docs/decisions.md`](docs/decisions.md).
 - Packaging: the native host ships as a Node.js single executable application (SEA, no new runtime or bundler), one binary per OS and architecture; it installs itself (`install`/`uninstall` subcommands, installer in `host/install/` shared with `npm run install-host`), the manifest names the binary directly and the native host mode is detected from the extension id Firefox passes, an upgrade renames a running binary aside (Windows), and a pushed `vX.Y.Z` tag matching `src/package.json` and the extension manifest publishes one binary per target (linux-x64, linux-arm64, macos-arm64, macos-x64, windows-x64), `SHA256SUMS` and the unsigned extension package on GitHub Releases; binaries are not code-signed for now; end-user guide in [`docs/install.md`](docs/install.md); see [Packaging](docs/decisions.md#packaging).
 - Tests: Vitest, `npm test` from `src/`; every feature ships with its own automated tests.
 - TDD where it fits: tests first for logic with a spec known up front, tests after for code that depends on real Firefox behavior; see [Testing approach](docs/decisions.md#testing-approach).
+- AMO signing: the extension id `claude-sidebar@artem.dev` is signed unlisted on AMO with `web-ext sign` run locally only (API keys in the untracked `src/.env`, never on GitHub or in CI); no automatic updates (no `update_url`) for now; the release workflow keeps shipping the unsigned package for now; see [AMO signing](docs/decisions.md#amo-signing).
 - Windows support is required: hardened `%LOCALAPPDATA%` directory, `.bat` wrapper and `HKCU` registration with rollback; see [Windows installer](docs/decisions.md#windows-installer).
 
 ## Threat model
@@ -52,7 +53,7 @@ Full text: [Threat model](docs/decisions.md#threat-model).
 
 - Protected: other OS users and the network cannot use or impersonate the bridge; the browser to host link is protected by native messaging `allowed_extensions`.
 - Trusted: any process of the same OS user, Administrators, SYSTEM and root.
-- Before distribution: the extension id is not reserved on AMO; fixed by `feature/amo-signing`.
+- Before distribution: the extension id `claude-sidebar@artem.dev` is not reserved on AMO until `feature/amo-signing` signs it.
 - Next major risk: prompt injection from page content; `feature/permissions` must land before `feature/accessibility-tree` and `feature/devtools-tools`.
 - Accepted: the `--remote-debugging-port` endpoint is unauthenticated and reachable by any local process, including other OS users; with the flag Firefox shows the robot icon and striped URL bar and sets `navigator.webdriver=true` on every page even without a session.
 - Accepted by design: `navigate` and `tabs_close` work on any tab, including the user's; every action on a site needs that site's permission (enforced since `feature/permissions-prompt`).
@@ -91,6 +92,7 @@ docs/
 src/                   npm package root; every command is run from here
   package.json
   package-lock.json
+  .env.example         template of the untracked .env with the AMO API credentials for web-ext sign
   tsconfig.base.json   shared strict compiler options (no emit)
   tsconfig.json        type check for build scripts, their tests, web-ext and Vitest config (Node types, no DOM)
   web-ext-config.mjs   web-ext defaults: source dir, artifacts dir, run/lint options
