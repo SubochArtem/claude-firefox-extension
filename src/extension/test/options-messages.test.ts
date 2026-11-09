@@ -1,5 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { handleOptionsMessage, OPTIONS_PAGE, REVOKE_PERMISSION_MESSAGE } from '../options/options-messages';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CLAUDE_CODE_STATUS_MESSAGE,
+  createClaudeCodeStatusHandler,
+  handleOptionsMessage,
+  OPTIONS_PAGE,
+  REVOKE_PERMISSION_MESSAGE,
+} from '../options/options-messages';
 import { PERMISSION_STORAGE_KEY } from '../permissions/permission-store';
 import { EXTENSION_ID, EXTENSION_ORIGIN, mockBrowser } from './browser-mock';
 
@@ -50,5 +56,31 @@ describe('options page messages', () => {
 
   it.each([undefined, 'text', { type: 'permission_prompt_get' }])('ignores other messages (%o)', (message) => {
     expect(handleOptionsMessage(message, OPTIONS_SENDER)).toBeUndefined();
+  });
+});
+
+describe('Claude Code status for the options page', () => {
+  const reply = { hostConnected: true, status: { found: true, ready: true } };
+
+  it('asks the relay for the options page', async () => {
+    const status = vi.fn(async () => reply);
+    const handle = createClaudeCodeStatusHandler(status);
+    expect(await handle({ type: CLAUDE_CODE_STATUS_MESSAGE }, OPTIONS_SENDER)).toEqual(reply);
+    expect(status).toHaveBeenCalledOnce();
+  });
+
+  it.each<[string, Partial<browser.runtime.MessageSender>]>([
+    ['another extension', { id: 'other@example', url: `${EXTENSION_ORIGIN}/${OPTIONS_PAGE}` }],
+    ['a content script', { id: EXTENSION_ID, url: 'https://example.com/' }],
+  ])('refuses a request from %s', async (_label, sender) => {
+    const status = vi.fn(async () => reply);
+    const handle = createClaudeCodeStatusHandler(status);
+    await expect(handle({ type: CLAUDE_CODE_STATUS_MESSAGE }, sender as browser.runtime.MessageSender)).rejects.toThrow(/options page/);
+    expect(status).not.toHaveBeenCalled();
+  });
+
+  it('ignores other messages', () => {
+    const handle = createClaudeCodeStatusHandler(vi.fn());
+    expect(handle({ type: REVOKE_PERMISSION_MESSAGE, id: 'x' }, OPTIONS_SENDER)).toBeUndefined();
   });
 });

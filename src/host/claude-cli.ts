@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir } from 'node:fs/promises';
 import { userInfo } from 'node:os';
 import { posix, win32 } from 'node:path';
 import { envValue, installPaths, type Env, type HostSource } from './install/paths';
-import { CHAT_TOKEN_ENV, type ChatErrorCode } from './protocol';
+import { CHAT_TOKEN_ENV, type ChatErrorCode, type ChatStatus } from './protocol';
 
 export const CLAUDE_PATH_ENV = 'CLAUDE_FIREFOX_CLAUDE_PATH';
 const MIN_VERSION = [2, 1, 302] as const;
@@ -189,6 +189,33 @@ function runClaude(claude: ClaudeCommand, args: string[], env: Record<string, st
   });
 }
 
+interface ClaudeAuth {
+  loggedIn: boolean;
+  // undefined when claude did not report one; a value that is not a short identifier is reported as ''.
+  authMethod?: string;
+}
+
+const AUTH_METHOD = /^[A-Za-z0-9._-]{1,64}$/;
+
+// The JSON also names the account and organization; only these two fields are read.
+async function readAuth(claude: ClaudeCommand, childEnv: Record<string, string>): Promise<ClaudeAuth> {
+  const output = await runClaude(claude, ['auth', 'status', '--json'], childEnv);
+  try {
+    const status: unknown = JSON.parse(output.stdout);
+    if (typeof status !== 'object' || status === null) return { loggedIn: false };
+    const { loggedIn, authMethod } = status as Record<string, unknown>;
+    if (authMethod === undefined) return { loggedIn: loggedIn === true };
+    return { loggedIn: loggedIn === true, authMethod: typeof authMethod === 'string' && AUTH_METHOD.test(authMethod) ? authMethod : '' };
+  } catch {
+    return { loggedIn: false };
+  }
+}
+
+// Older CLIs do not report authMethod; their login is accepted as it is.
+function isSubscription(auth: ClaudeAuth): boolean {
+  return auth.loggedIn && (auth.authMethod === undefined || auth.authMethod === SUBSCRIPTION_AUTH_METHOD);
+}
+
 /** Checks the version and that Claude Code is logged in with the environment the session will get. */
 export async function checkClaude(claude: ClaudeCommand, env: Env): Promise<void> {
   const childEnv = claudeEnv(env);
@@ -207,23 +234,39 @@ export async function checkClaude(claude: ClaudeCommand, env: Env): Promise<void
       `Claude Code ${version.join('.')} is too old; ${required} or newer is required. Update it with "claude update".`,
     );
   }
-  const auth = await runClaude(claude, ['auth', 'status', '--json'], childEnv);
-  let subscription = false;
-  try {
-    const status: unknown = JSON.parse(auth.stdout);
-    if (typeof status === 'object' && status !== null) {
-      const { loggedIn, authMethod } = status as Record<string, unknown>;
-      // Older CLIs do not report authMethod; their login is accepted as it is.
-      subscription = loggedIn === true && (authMethod === undefined || authMethod === SUBSCRIPTION_AUTH_METHOD);
-    }
-  } catch {
-    subscription = false;
-  }
-  if (!subscription) {
+  if (!isSubscription(await readAuth(claude, childEnv))) {
     throw new ChatStartError(
       'not_logged_in',
       'Claude Code is not logged in with a Claude subscription. Run "claude auth login" in a terminal, then start the chat again. API keys and cloud providers are not used for the sidebar.',
     );
+  }
+}
+
+/** The same checks as checkClaude, reported instead of thrown, for the extension's status display. */
+export async function claudeStatus(locate: () => ClaudeCommand, env: Env): Promise<ChatStatus> {
+  let claude: ClaudeCommand;
+  try {
+    claude = locate();
+  } catch (error) {
+    return { found: false, ready: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  const found = { found: true, path: claude.command } as const;
+  try {
+    const childEnv = claudeEnv(env);
+    const version = parseClaudeVersion((await runClaude(claude, ['--version'], childEnv)).stdout);
+    const versionText = version === undefined ? {} : { version: version.join('.') };
+    if (version === undefined || !isSupportedClaudeVersion(version)) return { ...found, ...versionText, versionOk: false, ready: false };
+    const auth = await readAuth(claude, childEnv);
+    return {
+      ...found,
+      ...versionText,
+      versionOk: true,
+      loggedIn: auth.loggedIn,
+      ...(auth.authMethod === undefined || auth.authMethod === '' ? {} : { authMethod: auth.authMethod }),
+      ready: isSubscription(auth),
+    };
+  } catch (error) {
+    return { ...found, ready: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

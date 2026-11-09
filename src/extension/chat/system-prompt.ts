@@ -1,3 +1,4 @@
+import { MAX_CHAT_SYSTEM_PROMPT_LENGTH } from '../protocol';
 import type { TextBlock } from './provider';
 
 export interface BoundTab {
@@ -42,16 +43,43 @@ function tabText(tab: BoundTab | undefined): string {
   ].join('\n');
 }
 
+function platformText(platformOs: string): string {
+  const platform = PLATFORM_NAMES[platformOs] ?? platformOs;
+  const modifier = platformOs === 'mac' ? 'cmd' : 'ctrl';
+  return `Platform: ${platform}. Use ${modifier} as the primary modifier for keyboard shortcuts with the computer tool's key action, for example "${modifier}+a" to select all.`;
+}
+
 export function buildSystemPrompt(context: SystemPromptContext): TextBlock[] {
-  const platform = PLATFORM_NAMES[context.platform] ?? context.platform;
-  const modifier = context.platform === 'mac' ? 'cmd' : 'ctrl';
-  const environment = [
-    `Current date: ${localDate(context.now)}.`,
-    `Model: ${context.model}.`,
-    `Platform: ${platform}. Use ${modifier} as the primary modifier for keyboard shortcuts with the computer tool's key action, for example "${modifier}+a" to select all.`,
-  ].join('\n');
+  const environment = [`Current date: ${localDate(context.now)}.`, `Model: ${context.model}.`, platformText(context.platform)].join('\n');
   return [
     { type: 'text', text: GUIDANCE },
     { type: 'text', text: `${environment}\n\n${tabText(context.tab)}` },
   ];
+}
+
+const MAX_TAB_URL_CHARS = 4_000;
+const MAX_TAB_TITLE_CHARS = 1_000;
+
+function clip(value: string, max: number): string {
+  return value.length <= max ? value : `${value.slice(0, max)}...`;
+}
+
+/**
+ * The text appended to Claude Code's own system prompt for a sidebar session. Claude Code picks the
+ * model, so none is named; the page-supplied URL and title are clipped to keep the prompt within the
+ * host's limit.
+ */
+export function buildClaudeCodeSystemPrompt(context: Omit<SystemPromptContext, 'model'>): string {
+  const tab = context.tab && {
+    id: context.tab.id,
+    url: clip(context.tab.url, MAX_TAB_URL_CHARS),
+    title: clip(context.tab.title, MAX_TAB_TITLE_CHARS),
+  };
+  const text = [
+    GUIDANCE,
+    'The browser tools are the mcp__firefox__ tools.',
+    `Current date: ${localDate(context.now)}.\n${platformText(context.platform)}`,
+    tabText(tab),
+  ].join('\n\n');
+  return text.slice(0, MAX_CHAT_SYSTEM_PROMPT_LENGTH);
 }

@@ -31,18 +31,24 @@ function isRunning(pid: number): boolean {
 
 // Firefox starts the host with a minimal environment, so the fake claude is found through the
 // explicit path variable; a shell wrapper stands in for the claude executable.
-async function hostWithFakeClaude(): Promise<{ host: FakeExtension; workDir: string; record: string }> {
+async function hostWithFakeClaude(
+  extraEnv: Record<string, string> = {},
+): Promise<{ host: FakeExtension; workDir: string; record: string; wrapper: string }> {
   const dir = await tempDir();
   const runtimeDir = join(dir, 'run');
   const wrapper = join(dir, 'claude');
   const record = join(dir, 'runs.jsonl');
   writeFileSync(wrapper, `#!/bin/sh\nexec '${process.execPath}' '${FAKE_CLAUDE}' "$@"\n`);
   chmodSync(wrapper, 0o755);
-  const overrides = { [CLAUDE_PATH_ENV]: wrapper, FAKE_CLAUDE_RECORD: record, HOME: dir, XDG_DATA_HOME: join(dir, 'data') };
+  const overrides = { [CLAUDE_PATH_ENV]: wrapper, FAKE_CLAUDE_RECORD: record, HOME: dir, XDG_DATA_HOME: join(dir, 'data'), ...extraEnv };
   const env = childEnv(overrides, hostEnv(runtimeDir));
   mkdirSync(runtimeDir, { mode: 0o700 });
   const workDir = chatWorkDir(process.platform, overrides, dir);
-  return { host: await startHost(runtimeDir, { env }), workDir, record };
+  return { host: await startHost(runtimeDir, { env }), workDir, record, wrapper };
+}
+
+function chatRunsOrNone(record: string): ChatRun[] {
+  return existsSync(record) ? chatRuns(record) : [];
 }
 
 interface ChatRun {
@@ -178,5 +184,40 @@ describe.skipIf(process.platform === 'win32')('native host chat sessions', () =>
     expect(await host.nextRequest()).toEqual({ type: 'tool_request', id: expect.stringMatching(/^\d+:1$/), tool: 'navigate', args: {} });
     early.send({ type: 'tool_request', id: '2', tool: 'navigate', args: {} });
     expect(await host.nextRequest()).toEqual({ type: 'tool_request', id: expect.stringMatching(/^\d+:2$/), tool: 'navigate', args: {} });
+  });
+
+  it('answers a status request with the claude it found and its login, without starting a session', async () => {
+    const { host, wrapper, record } = await hostWithFakeClaude();
+    host.send({ type: 'chat_status_request', requestId: 'status-1' });
+    await waitFor(() => expect(chatMessages(host, 'chat_status_response')).toHaveLength(1));
+    expect(chatMessages(host, 'chat_status_response')[0]).toEqual({
+      type: 'chat_status_response',
+      requestId: 'status-1',
+      found: true,
+      path: wrapper,
+      version: '2.1.316',
+      versionOk: true,
+      loggedIn: true,
+      authMethod: 'claude.ai',
+      ready: true,
+    });
+    expect(chatRunsOrNone(record)).toEqual([]);
+  });
+
+  it('reports a claude that is not logged in', async () => {
+    const { host } = await hostWithFakeClaude({ FAKE_CLAUDE_LOGGED_IN: 'false' });
+    host.send({ type: 'chat_status_request', requestId: 'status-2' });
+    await waitFor(() => expect(chatMessages(host, 'chat_status_response')).toHaveLength(1));
+    expect(chatMessages(host, 'chat_status_response')[0]).toMatchObject({ requestId: 'status-2', found: true, loggedIn: false, ready: false });
+  });
+
+  it('reports a claude that was not found', async () => {
+    const dir = await tempDir();
+    const { host } = await hostWithFakeClaude({ [CLAUDE_PATH_ENV]: join(dir, 'missing-claude') });
+    host.send({ type: 'chat_status_request', requestId: 'status-3' });
+    await waitFor(() => expect(chatMessages(host, 'chat_status_response')).toHaveLength(1));
+    const response = chatMessages(host, 'chat_status_response')[0];
+    expect(response).toMatchObject({ type: 'chat_status_response', requestId: 'status-3', found: false, ready: false });
+    expect(response?.['error']).toContain('missing-claude');
   });
 });

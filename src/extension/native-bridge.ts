@@ -1,5 +1,12 @@
 import { type ClientApprovals, createClientApprovals } from './permissions/client-prompt';
-import { type ExtensionToHostMessage, NATIVE_HOST_NAME, parseHostMessage } from './protocol';
+import {
+  type ChatHostMessage,
+  type ExtensionToHostMessage,
+  type HostChatRequest,
+  isChatHostMessage,
+  NATIVE_HOST_NAME,
+  parseHostMessage,
+} from './protocol';
 import { executeTool } from './tools';
 import { type BidiEvaluateChannel, createBidiEvaluateChannel } from './tools/bidi-evaluate';
 import { type BidiInputChannel, createBidiInputChannel } from './tools/bidi-input';
@@ -26,6 +33,29 @@ let pongTimer: ReturnType<typeof setTimeout> | undefined;
 let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let stableTimer: ReturnType<typeof setTimeout> | undefined;
 let retryDelay = INITIAL_RETRY_DELAY_MS;
+
+export interface ChatHostListener {
+  handleHostMessage: (message: ChatHostMessage) => void;
+  hostDisconnected: () => void;
+}
+
+// The sidebar's Claude Code relay: gets the chat messages of every port and hears when a port goes.
+let chatListener: ChatHostListener | undefined;
+
+export function setChatHostListener(listener: ChatHostListener): void {
+  chatListener = listener;
+}
+
+// False when no port is open or the port is already closing; the request then went nowhere.
+export function sendToNativeHost(message: HostChatRequest): boolean {
+  if (!port) return false;
+  try {
+    send(port, message);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // The BiDi channels of the current port, for tool calls that do not come over the port (sidebar chat).
 export function bidiChannels(): { input: BidiInputChannel | undefined; evaluate: BidiEvaluateChannel | undefined } {
@@ -89,6 +119,10 @@ function handleMessage(source: browser.runtime.Port, message: unknown): void {
     bidiEvaluate?.handleResponse(parsed);
     return;
   }
+  if (isChatHostMessage(parsed)) {
+    chatListener?.handleHostMessage(parsed);
+    return;
+  }
   void executeTool(parsed, clientApprovals, bidiInput, bidiEvaluate).then((response) => {
     if (source === port) send(source, response);
   });
@@ -107,6 +141,7 @@ function handleLoss(lost: browser.runtime.Port): void {
   pongTimer = undefined;
   clearTimeout(stableTimer);
   stableTimer = undefined;
+  chatListener?.hostDisconnected();
   scheduleReconnect();
 }
 

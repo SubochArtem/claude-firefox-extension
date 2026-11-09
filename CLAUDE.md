@@ -116,25 +116,26 @@ src/                   npm package root; every command is run from here
     tsconfig.json      extension type check (DOM + WebExtension types, no Node), test/ included
     test/              unit tests with a mocked `browser` global (browser-mock.ts), manifest permission checks, happy-dom tests for page/
     settings.ts        extension settings in storage.local (agent tabs: Claude container or normal profile), validated loader
-    chat-settings.ts   sidebar chat settings in storage.local (API key, model from CHAT_MODELS), validated loader and saver, Anthropic API host permission pattern
+    chat-settings.ts   sidebar chat settings in storage.local (API key, model from CHAT_MODELS, backend api or claude-code, not yet in the UI), validated loader and saver, Anthropic API host permission pattern
     chat/              sidebar chat model access (no browser.* calls)
       provider.ts      ChatProvider interface: one streamed turn; Anthropic-shaped message, content block, usage and result types
       anthropic-provider.ts  Anthropic Messages API over fetch: streamed request with cache_control on the last tool and system block, SSE event assembly into text and tool_use blocks, HTTP and stream errors, idle watchdog, abort
       sse.ts           server-sent events parser over decoded text, chunks split anywhere
       chat-errors.ts   ChatApiError (status, API error type, retryable) and ChatAbortError
       agent-loop.ts    agent loop: turns while tool_use, tool calls in order, 50 turn cap, retries of retryable API errors with backoff, old screenshots trimmed from requests, cancellation with "cancelled by user" results
-      system-prompt.ts  system blocks: guidance (tools, untrusted page content, site permissions), date, model, platform and shortcut modifier, bound tab
-    options/           options page (about:addons): agent tabs switch, sidebar chat API key, model and api.anthropic.com access, stored site permissions with Revoke
+      system-prompt.ts  system blocks: guidance (tools, untrusted page content, site permissions), date, model, platform and shortcut modifier, bound tab; the Claude Code append prompt (no model, clipped tab URL and title, within the host limit)
+      claude-code-relay.ts  Claude Code sessions between sidebar ports and the native host: sidebar sender check, session ids made in the background, events only to the owning port, close on sidebar disconnect, synthetic error and close on native port loss, chat_status with a timeout
+    options/           options page (about:addons): agent tabs switch, sidebar chat API key, model and api.anthropic.com access, read-only Claude Code status, stored site permissions with Revoke
       options.html, options.ts  the page: renders with textContent, live refresh on storage changes
-      options-view.ts  pure rows for the permission list, saved API key status (last 4 characters only)
-      options-messages.ts  background handler for revoke requests from the options page
+      options-view.ts  pure rows for the permission list, saved API key status (last 4 characters only), Claude Code status line
+      options-messages.ts  background handlers for revoke and Claude Code status requests from the options page
     sidebar/           sidebar chat
       markdown.ts      Markdown renderer for chat messages built with createElement/textContent only: paragraphs, headings, emphasis, code spans and fences (unclosed fence renders as code), lists with one nested level, blockquotes, rules, http(s)/mailto links and bare URLs, anything else as literal text
       sidebar.html, sidebar.css, sidebar.ts  the sidebar chat page (sidebar_action): DOM binding of the session, setup panel (Open options, Grant access), message list, Enter to send, Stop, New chat; follows the light/dark theme
       chat-session.ts  conversation state without browser.* calls: history (a prompt after a trailing user message joins it), running state, agent loop events to view items (streamed text, tool lines with clipped input and results, retry and error notes)
       setup-state.ts   setup state from the saved key and the api.anthropic.com grant: needs key, needs access, ready
       sidebar-messages.ts  background handler for the sidebar's tool calls: sender check (sidebar page only), tool registry with the popup prompt and the native port's BiDi channels, results as text and image blocks
-      sidebar-constants.ts  sidebar page path and the tool call message type, shared by the sidebar page and the background handler without pulling in the tools
+      sidebar-constants.ts  sidebar page path, the tool call message type and the Claude Code port name, shared by the sidebar page and the background without pulling in the tools
     page/              code that runs inside the page, in the isolated world of the top frame unless noted as MAIN world (no browser.* calls)
       ref-registry.ts  ref_N ids: WeakRef per ref, element -> ref WeakMap, sweep, resolve (found, not found, gone)
       element-role.ts  role from the role attribute or the tag, interactive check, heading level
@@ -226,7 +227,7 @@ src/                   npm package root; every command is run from here
     bridge-info.ts     bridge.json location, atomic write, validated read, removal on exit
     handshake.ts       bridge handshake: nonces, HMAC proofs, message parsers, limits, client side on a socket
     host-probe.ts      authenticated liveness probe of the host named in bridge.json (Windows second-host check)
-    claude-cli.ts      the user's claude CLI for sidebar chat sessions: locating it (CLAUDE_FIREFOX_CLAUDE_PATH, PATH, known locations), version and login checks, environment without API key or provider variables, chat argv and MCP config (session token referenced from the environment), private working directory
+    claude-cli.ts      the user's claude CLI for sidebar chat sessions: locating it (CLAUDE_FIREFOX_CLAUDE_PATH, PATH, known locations), version and login checks (thrown for a session start, reported for chat_status), environment without API key or provider variables, chat argv and MCP config (session token referenced from the environment), private working directory
     chat-sessions.ts   chat sessions for the extension: one claude process per session (cap 4), queued input while starting, interrupt, close with SIGTERM/SIGKILL after a grace period, chat_event/chat_error/chat_closed messages, a random token per session mapped back to its id
     chat-events.ts     claude stdout lines to stream-json events, events reduced below the 1 MB native messaging limit
     bidi-client.ts     WebDriver BiDi WebSocket client: port from CLAUDE_FIREFOX_BIDI_PORT, commands with timeouts, connection error messages
@@ -237,7 +238,7 @@ src/                   npm package root; every command is run from here
     listen.ts          listen on an endpoint, retrying fresh endpoints on EADDRINUSE
     json-lines.ts      newline-delimited JSON framing on the bridge socket
     native-messaging.ts  Firefox native messaging stdio framing
-    native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients, tags tool requests of chat session clients with their session id, routes permission requests, runs BiDi input requests and Claude Code chat sessions
+    native-host.ts     native host: talks to the extension, listens on the bridge socket, multiplexes clients, tags tool requests of chat session clients with their session id, routes permission requests, runs BiDi input requests and Claude Code chat sessions, answers chat_status
     mcp-server.ts      MCP server over stdio: registers the shared tool definitions, forwards calls to the native host, asks permissions by elicitation (never for a sidebar chat session, whose token from the environment it presents in the handshake)
   node_modules/        (not committed)
   dist/extension/      built extension, loaded by web-ext (not committed)

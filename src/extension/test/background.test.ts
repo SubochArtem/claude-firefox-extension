@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { bidiChannels, connect, RECONNECT_ALARM } = vi.hoisted(() => ({
+const { bidiChannels, connect, RECONNECT_ALARM, sendToNativeHost, setChatHostListener } = vi.hoisted(() => ({
   bidiChannels: vi.fn(() => ({})),
   connect: vi.fn(),
   RECONNECT_ALARM: 'reconnect-native-host',
+  sendToNativeHost: vi.fn(() => false),
+  setChatHostListener: vi.fn(),
 }));
 
-vi.mock('../native-bridge', () => ({ bidiChannels, connect, RECONNECT_ALARM }));
+vi.mock('../native-bridge', () => ({ bidiChannels, connect, RECONNECT_ALARM, sendToNativeHost, setChatHostListener }));
 
 function listenerList<Listener>() {
   const listeners: Listener[] = [];
@@ -14,6 +16,7 @@ function listenerList<Listener>() {
 }
 
 let onMessage: ReturnType<typeof listenerList<(message: unknown) => unknown>>;
+let onConnect: ReturnType<typeof listenerList<(port: browser.runtime.Port) => void>>;
 let onAlarm: ReturnType<typeof listenerList<(alarm: { name: string }) => void>>;
 let onStartup: ReturnType<typeof listenerList<() => void>>;
 let onCommitted: { listeners: { listener: unknown; filter: unknown }[] };
@@ -28,7 +31,9 @@ function filteredEvent() {
 
 beforeEach(async () => {
   connect.mockReset();
+  setChatHostListener.mockReset();
   onMessage = listenerList();
+  onConnect = listenerList();
   onAlarm = listenerList();
   onStartup = listenerList();
   onTabRemoved = listenerList();
@@ -40,6 +45,9 @@ beforeEach(async () => {
       onInstalled: listenerList().event,
       onStartup: onStartup.event,
       onMessage: onMessage.event,
+      onConnect: onConnect.event,
+      id: 'claude-firefox-extension@localhost',
+      getURL: (path: string) => `moz-extension://test/${path}`,
       getManifest: () => ({ version: '0' }),
     },
     alarms: { onAlarm: onAlarm.event },
@@ -60,8 +68,15 @@ describe('background script', () => {
     const { handlePromptMessage } = await import('../permissions/popup-prompt');
     const { handleOptionsMessage } = await import('../options/options-messages');
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(onMessage.listeners).toEqual([handlePromptMessage, handleOptionsMessage, expect.any(Function)]);
+    expect(onMessage.listeners).toEqual([handlePromptMessage, handleOptionsMessage, expect.any(Function), expect.any(Function)]);
     expect(onStartup.listeners).toEqual([connect]);
+  });
+
+  it('wires the Claude Code relay to sidebar ports and the native host', () => {
+    expect(onConnect.listeners).toHaveLength(1);
+    expect(setChatHostListener).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ handleHostMessage: expect.any(Function), hostDisconnected: expect.any(Function) }),
+    );
   });
 
   it('registers console and network tracking on http(s) commits and tab removal', async () => {
@@ -92,13 +107,13 @@ describe('background script', () => {
     alarmListener?.({ name: RECONNECT_ALARM });
     alarmListener?.({ name: RECONNECT_ALARM });
     expect(connect).toHaveBeenCalledTimes(3);
-    expect(onMessage.listeners).toHaveLength(3);
+    expect(onMessage.listeners).toHaveLength(4);
   });
 
   it('ignores other alarms', () => {
     const [alarmListener] = onAlarm.listeners;
     alarmListener?.({ name: 'something-else' });
     expect(connect).toHaveBeenCalledTimes(1);
-    expect(onMessage.listeners).toHaveLength(3);
+    expect(onMessage.listeners).toHaveLength(4);
   });
 });

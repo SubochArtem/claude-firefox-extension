@@ -88,16 +88,97 @@ export type BidiEvaluateResponse =
   | { type: 'bidi_evaluate_response'; requestId: string; ok: true; exception: string }
   | { type: 'bidi_evaluate_response'; requestId: string; ok: false; error: string; unavailable?: true };
 
-export type ExtensionToHostMessage = { type: 'ping' } | ToolResponse | PermissionRequest | BidiInputRequest | BidiEvaluateRequest;
+// Must match MAX_CHAT_SYSTEM_PROMPT_LENGTH in host/protocol.ts.
+export const MAX_CHAT_SYSTEM_PROMPT_LENGTH = 16_000;
+
+export type ChatContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
+// Starts a Claude Code session in the native host; it ends with exactly one chat_closed.
+export interface ChatStart {
+  type: 'chat_start';
+  sessionId: string;
+  model?: string;
+  appendSystemPrompt?: string;
+}
+
+// The host validates the content and answers chat_error invalid_request when it refuses it.
+export interface ChatSend {
+  type: 'chat_send';
+  sessionId: string;
+  content: string | ChatContentBlock[];
+}
+
+export interface ChatInterrupt {
+  type: 'chat_interrupt';
+  sessionId: string;
+}
+
+export interface ChatClose {
+  type: 'chat_close';
+  sessionId: string;
+}
+
+export interface ChatStatusRequest {
+  type: 'chat_status_request';
+  requestId: string;
+}
+
+export type HostChatRequest = ChatStart | ChatSend | ChatInterrupt | ChatClose | ChatStatusRequest;
+
+// One stream-json event of the session's claude process, as the host passed it on.
+export interface ChatEvent {
+  type: 'chat_event';
+  sessionId: string;
+  event: Record<string, unknown>;
+  reduced?: true;
+}
+
+export interface ChatError {
+  type: 'chat_error';
+  sessionId: string;
+  code: string;
+  message: string;
+}
+
+export interface ChatClosed {
+  type: 'chat_closed';
+  sessionId: string;
+}
+
+export interface ChatStatus {
+  found: boolean;
+  path?: string;
+  version?: string;
+  versionOk?: boolean;
+  loggedIn?: boolean;
+  authMethod?: string;
+  ready: boolean;
+  error?: string;
+}
+
+export type ChatStatusResponse = { type: 'chat_status_response'; requestId: string } & ChatStatus;
+
+export type ChatHostMessage = ChatEvent | ChatError | ChatClosed | ChatStatusResponse;
+
+export type ExtensionToHostMessage =
+  | { type: 'ping' }
+  | ToolResponse
+  | PermissionRequest
+  | BidiInputRequest
+  | BidiEvaluateRequest
+  | HostChatRequest;
 export type HostToExtensionMessage =
   | { type: 'pong' }
   | ToolRequest
   | PermissionResponse
   | BidiInputResponse
-  | BidiEvaluateResponse;
+  | BidiEvaluateResponse
+  | ChatHostMessage;
 
 // Must match isChatSessionId in host/protocol.ts.
-function isChatSessionId(value: unknown): value is string {
+export function isChatSessionId(value: unknown): value is string {
   return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 }
 
@@ -118,9 +199,58 @@ function parseEvaluateResponse(value: Record<string, unknown>): BidiEvaluateResp
   return { type, requestId, ok, error, ...(value['unavailable'] === true ? { unavailable: true as const } : {}) };
 }
 
+function optionalString<K extends string>(value: Record<string, unknown>, key: K): { [P in K]?: string } {
+  const field = value[key];
+  return (typeof field === 'string' ? { [key]: field } : {}) as { [P in K]?: string };
+}
+
+function optionalBoolean<K extends string>(value: Record<string, unknown>, key: K): { [P in K]?: boolean } {
+  const field = value[key];
+  return (typeof field === 'boolean' ? { [key]: field } : {}) as { [P in K]?: boolean };
+}
+
+function parseChatStatusResponse(value: Record<string, unknown>): ChatStatusResponse | undefined {
+  const { requestId } = value;
+  if (typeof requestId !== 'string') return undefined;
+  return {
+    type: 'chat_status_response',
+    requestId,
+    found: value['found'] === true,
+    ...optionalString(value, 'path'),
+    ...optionalString(value, 'version'),
+    ...optionalBoolean(value, 'versionOk'),
+    ...optionalBoolean(value, 'loggedIn'),
+    ...optionalString(value, 'authMethod'),
+    ready: value['ready'] === true,
+    ...optionalString(value, 'error'),
+  };
+}
+
+function parseChatHostMessage(value: Record<string, unknown>): ChatHostMessage | undefined {
+  if (value['type'] === 'chat_status_response') return parseChatStatusResponse(value);
+  const { sessionId } = value;
+  if (!isChatSessionId(sessionId)) return undefined;
+  if (value['type'] === 'chat_closed') return { type: 'chat_closed', sessionId };
+  if (value['type'] === 'chat_event') {
+    const { event } = value;
+    if (!isRecord(event)) return undefined;
+    return { type: 'chat_event', sessionId, event, ...(value['reduced'] === true ? { reduced: true as const } : {}) };
+  }
+  const { code, message } = value;
+  if (typeof code !== 'string' || typeof message !== 'string') return undefined;
+  return { type: 'chat_error', sessionId, code, message };
+}
+
+const CHAT_HOST_MESSAGE_TYPES = new Set(['chat_event', 'chat_error', 'chat_closed', 'chat_status_response']);
+
+export function isChatHostMessage(message: HostToExtensionMessage): message is ChatHostMessage {
+  return CHAT_HOST_MESSAGE_TYPES.has(message.type);
+}
+
 export function parseHostMessage(value: unknown): HostToExtensionMessage | undefined {
   if (!isRecord(value)) return undefined;
   if (value['type'] === 'pong') return { type: 'pong' };
+  if (typeof value['type'] === 'string' && CHAT_HOST_MESSAGE_TYPES.has(value['type'])) return parseChatHostMessage(value);
   if (value['type'] === 'permission_response') {
     const { requestId, answer, includeSubdomains } = value;
     if (typeof requestId !== 'string') return undefined;
