@@ -9,7 +9,7 @@ import { registerNetworkTracking } from './tools/network-tracking';
 
 browser.runtime.onInstalled.addListener((details) => {
   const { version } = browser.runtime.getManifest();
-  console.log(`Claude Firefox Extension ${version} installed (reason: ${details.reason})`);
+  console.log(`Claude Sidebar ${version} installed (reason: ${details.reason})`);
 });
 
 // An event page only runs at browser startup if it listens to runtime.onStartup. Every wake

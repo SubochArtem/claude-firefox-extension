@@ -26,7 +26,7 @@ const NATIVE_HOST_NAME = 'claude_firefox_extension';
 // Must match EXTENSION_ID in host/protocol.ts: Firefox passes it to a native host it starts.
 const EXTENSION_ID = 'claude-sidebar@artem.dev';
 const NOT_CONNECTED =
-  'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
+  'Firefox is not running or the Claude Sidebar extension is not connected. Open Firefox with the extension enabled and try again.';
 const BRIDGE_TIMEOUT_MS = 90_000;
 const RAW_CLOSE_TIMEOUT_MS = 10_000;
 const SECOND_FIREFOX_MS = 40_000;

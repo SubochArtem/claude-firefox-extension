@@ -31,7 +31,7 @@ import {
 } from './helpers';
 
 const NOT_CONNECTED =
-  'Firefox is not running or the Claude Firefox extension is not connected. Open Firefox with the extension enabled and try again.';
+  'Firefox is not running or the Claude Sidebar extension is not connected. Open Firefox with the extension enabled and try again.';
 const AUTH_FAILED = /^Authentication with the native host failed/;
 
 // The SDK's reduced default environment (HOME, LOGNAME, PATH, SHELL, TERM, USER; on Windows APPDATA,

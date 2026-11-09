@@ -10,7 +10,7 @@ export function containerUnavailableMessage(detail: string): string {
   return (
     `Failed to create a tab: the "${AGENT_CONTAINER_NAME}" container for agent tabs is not available (${detail}). ` +
     'Ask the user to turn on "Enable container tabs" in Firefox settings (General, Tabs) or to switch agent tabs to ' +
-    'the normal profile in the extension options (about:addons, Claude Firefox Extension, Options).'
+    'the normal profile in the extension options (about:addons, Claude Sidebar, Options).'
   );
 }
 

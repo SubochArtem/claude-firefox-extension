@@ -6,7 +6,7 @@ export interface ActionLabel {
 }
 
 export function permissionMessage(verb: string): string {
-  return `Failed to ${verb}: the extension is not allowed to access websites. Open about:addons, choose Claude Firefox Extension, open its Permissions tab and enable "Access your data for all websites", then try again.`;
+  return `Failed to ${verb}: the extension is not allowed to access websites. Open about:addons, choose Claude Sidebar, open its Permissions tab and enable "Access your data for all websites", then try again.`;
 }
 
 // Firefox's default extensions.webextensions.restrictedDomains: no extension may script or capture them.
